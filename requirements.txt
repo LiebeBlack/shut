@@ -1,0 +1,10 @@
+customtkinter>=5.2.2
+psutil>=5.9.0
+pystray>=0.19.5
+pillow>=10.0.0
+# wmi/pywin32 are lazy-imported by the thermal fallback chain only;
+# they have no wheels for Python 3.14 yet, and without them the app
+# gracefully degrades to the ctypes-only thermal path (never crashes).
+wmi; sys_platform == "win32" and python_version < "3.14"
+pywin32>=308; sys_platform == "win32" and python_version < "3.14"
+python-xlib; sys_platform == "linux"

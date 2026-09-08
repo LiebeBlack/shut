@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+installer/
+*.spec.bak
+sshub/gui/assets/sshub.ico
+data/
+*.log

@@ -1,0 +1,24 @@
+# Pragmatic lint config for sshub.
+# Policy: OS-boundary getters intentionally catch broad exceptions and
+# continue (never crash a sensor thread); that is the documented design.
+# Target: Python 3.10+ (matches pyproject requires-python).
+[lint]
+select = [
+    "E", "F", "W", "I", "N", "B", "UP", "C4", "SIM", "RUF",
+]
+ignore = [
+    "BLE001",  # broad except at OS boundaries is the documented design
+    "S110",    # try/except/pass in UI teardown paths is intentional
+    "TRY004",  # ValueError for bad profile payloads is the right contract
+    "DTZ005",  # scheduled-time math is intentionally local-wall-clock
+    "PLW1510", # subprocess check=False is intentional fire-and-forget
+]
+
+[lint.per-file-ignores]
+# scripts and build helpers may use loose style
+"scripts/*" = ["ALL"]
+# Win32 ctypes structures mirror the native API names exactly
+"sshub/platform_layer/__init__.py" = ["N801", "N806"]
+
+[lint.isort]
+known-first-party = ["sshub"]
