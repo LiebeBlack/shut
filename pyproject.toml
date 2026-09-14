@@ -12,9 +12,8 @@ dependencies = [
   "psutil>=5.9.0",
   "pystray>=0.19.5",
   "pillow>=10.0.0",
-  "wmi; sys_platform == 'win32' and python_version < '3.14'",
-  "pywin32>=308; sys_platform == 'win32' and python_version < '3.14'",
-  "python-xlib; sys_platform == 'linux'",
+  "wmi; python_version < '3.14'",
+  "pywin32>=308; python_version < '3.14'",
 ]
 
 [project.scripts]

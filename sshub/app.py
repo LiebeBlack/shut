@@ -46,6 +46,9 @@ def _setup_logging() -> None:
 
 
 def main() -> None:
+    if sys.platform != "win32":
+        print("Smart Shutdown Hub solo es compatible con Windows.")
+        return
     _enable_dpi_awareness()  # must precede any Tk root
     _setup_logging()
     log = logging.getLogger("sshub.app")
