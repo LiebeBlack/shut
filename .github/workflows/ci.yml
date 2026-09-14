@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
         python: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -31,10 +31,6 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-
-      - name: Install Xvfb (Linux headless display)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
 
       - name: Install Python dependencies
         run: |
@@ -47,12 +43,6 @@ jobs:
 
       - name: Compile check
         run: python -m py_compile main.py sshub/*.py sshub/core/*.py sshub/gui/*.py sshub/sensors/*.py sshub/platform_layer/*.py scripts/selftest.py
-
-      - name: Self-test (headless Linux)
-        if: runner.os == 'Linux'
-        # 1280x800x24: the xvfb-run default (640x480x8) breaks the GUI
-        # tests (window larger than the screen, 8-bit colors).
-        run: xvfb-run -a -s "-screen 0 1280x800x24" env SSHUB_DRY_RUN=1 python scripts/selftest.py
 
       - name: Self-test (Windows)
         if: runner.os == 'Windows'

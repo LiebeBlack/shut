@@ -147,19 +147,44 @@ class ProfileStore:
         added = 0
         for item in raw:
             try:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item["name"]).strip()
+                mode = str(item.get("mode", "absolute")).strip()
+                action = str(item.get("action", "shutdown")).strip()
+                if not name or mode not in {
+                    "absolute", "idle", "monitor", "process",
+                    "network", "smart", "hybrid",
+                } or action not in {
+                    "shutdown", "reboot", "sleep", "hibernate",
+                }:
+                    continue
+                enabled_value = item.get("enabled", 1)
+                if isinstance(enabled_value, str):
+                    enabled_value = enabled_value.strip().lower() in {
+                        "1", "true", "yes", "on"
+                    }
                 p = Profile(
                     id=None,
-                    name=str(item["name"]),
-                    mode=str(item.get("mode", "absolute")),
-                    countdown_minutes=int(item.get("countdown_minutes", 0)),
+                    name=name,
+                    mode=mode,
+                    countdown_minutes=max(
+                        0, int(item.get("countdown_minutes", 0))
+                    ),
                     at_time=str(item.get("at_time", "")),
-                    idle_minutes=int(item.get("idle_minutes", 30)),
+                    idle_minutes=max(0, int(item.get("idle_minutes", 30))),
                     process_name=str(item.get("process_name", "")),
-                    network_max_kbps=float(item.get("network_max_kbps", 50.0)),
-                    thermal_max_c=float(item.get("thermal_max_c", 90.0)),
-                    battery_min=int(item.get("battery_min", 10)),
-                    action=str(item.get("action", "shutdown")),
-                    enabled=int(item.get("enabled", 1)),
+                    network_max_kbps=max(
+                        0.0, float(item.get("network_max_kbps", 50.0))
+                    ),
+                    thermal_max_c=max(
+                        0.0, float(item.get("thermal_max_c", 90.0))
+                    ),
+                    battery_min=min(
+                        100, max(0, int(item.get("battery_min", 10)))
+                    ),
+                    action=action,
+                    enabled=1 if bool(enabled_value) else 0,
                 )
             except (KeyError, TypeError, ValueError):
                 continue  # skip malformed entries, never abort the batch

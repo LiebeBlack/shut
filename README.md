@@ -7,7 +7,7 @@ hilos daemon, cola de eventos anti-fugas y ejecución segura con ventana
 de emergencia de 30 segundos.
 
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
-![platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-lightgrey)
+![platform](https://img.shields.io/badge/platform-Windows%2010%2B-blue)
 ![ci](https://img.shields.io/github/actions/workflow/status/your-user/smart-shutdown-hub/ci.yml?label=CI)
 
 ---
@@ -46,8 +46,8 @@ de emergencia de 30 segundos.
   fallback automático. Publica consejos como eventos `ADVICE`; un clic
   en el dashboard aplica la acción recomendada. *Solo asesora, nunca
   ejecuta por sí mismo.*
-- 🧮 **SSE4.2**: detección por CPUID (Linux/macOS; Windows = capaz por
-  diseño) y afinado adaptativo de la cadencia del sensor Smart.
+- 🧮 **SSE4.2**: detección compatible con Windows y afinado adaptativo de
+  la cadencia del sensor Smart.
 - 📈 **Event bus instrumentado**: contadores `published/consumed/dropped`
   (`EventBus.stats()`), aviso visible en la GUI cuando la cola descarta
   eventos, y nuevo tipo de evento `ADVICE`.
@@ -75,7 +75,7 @@ de emergencia de 30 segundos.
 └───────────────────────────────────────────────────────────────────────┘
                │ platform_layer (capacidades + fallbacks memorizados)
                ▼
-   Win32 ctypes · WMI · libXss/X11 · sysfs · systemctl · osascript
+   Win32 ctypes · WMI · comandos nativos de Windows
 ```
 
 **Anti-fugas:** los sensores y el hub solo **publican** en una
@@ -114,20 +114,20 @@ ajustar la cadencia en CPUs de entrada. Ver [referencia completa](#referencia-de
 - `EventType` enum: `STATE, TRIGGER, OVERLAY, ABORT, EXECUTED, LOG, ERROR, ADVICE`.
 
 ### platform_layer
-Abstracción del SO con **cadenas de fallback y memoria de método**
+Capa nativa de **Windows** con **cadenas de fallback y memoria de método**
 (`_memo`): cada getter prueba métodos de barato a caro y recuerda cuál
 funcionó para no repetir rutas pesadas (clave en un Celeron).
 
 | Capacidad | Cadena |
 |---|---|
-| Idle | `GetLastInputInfo` (Win32) → `libXss` → `python-xlib` |
+| Idle | `GetLastInputInfo` (Win32) |
 | Monitor | `EnumDisplayDevicesW` → `GetSystemMetrics` / `xset q` |
-| Térmica | WMI `MSAcpi_ThermalZoneTemperature` → `Win32_TemperatureProbe` → `hwmon` → `/proc/acpi` |
-| Batería | `GetSystemPowerStatus` → `psutil.sensors_battery` → `/sys/class/power_supply` |
+| Térmica | WMI `MSAcpi_ThermalZoneTemperature` → `Win32_TemperatureProbe` |
+| Batería | `GetSystemPowerStatus` → `psutil.sensors_battery` |
 | Red | `psutil.net_io_counters` |
 | Procesos | `psutil.process_iter` → `tasklist`/`ps` |
-| Acciones | `shutdown /s|/r|/h` + `rundll32 powrprof` / `systemctl` → `loginctl` / `osascript` |
-| CPU | `cpu_flags()` (Linux `/proc/cpuinfo`, macOS `sysctl`) + `cpu_sse4_2()` |
+| Acciones | comandos Windows validados mediante `subprocess` |
+| CPU | `cpu_sse4_2()` con fallback seguro |
 
 `probe_capabilities()` se ejecuta una vez al arrancar, queda cacheado y
 se vuelca al log.
@@ -267,8 +267,8 @@ Ajustes de usuario (`settings.json`, escritura atómica): `language`,
 ## Optimización SSE4.2
 
 - **Detección**: `platform_layer.cpu_flags()`/`cpu_sse4_2()` leen
-  `/proc/cpuinfo` (Linux) o `sysctl` (macOS); en Windows se asume capaz
-  (todo x86 con Windows 10/11 lo incluye). El resultado se reporta en el
+  APIs disponibles en Windows; si no se puede detectar se asume capaz.
+  El resultado se reporta en el
   log de arranque y en el menú Ajustes.
 - **Afinado adaptativo**: sin SSE4.2 la cadencia del sensor Smart se
   relaja a 3 s para proteger CPUs antiguas; con SSE4.2 se mantiene la
@@ -287,7 +287,7 @@ Ajustes de usuario (`settings.json`, escritura atómica): `language`,
 - Matrix **ubuntu-latest / windows-latest × Python 3.11/3.12/3.13**.
 - `ruff check` + `py_compile` de todo el paquete.
 - **Self-test completo** (`scripts/selftest.py`, 80+ checks) con
-  `xvfb-run` en Linux (GUI headless) y nativo en Windows;
+  ejecución nativa en Windows;
   `SSHUB_DRY_RUN=1` garantiza que jamás se toca el SO.
 - `fail-fast: false` y timeout de 20 min por job.
 
@@ -310,9 +310,9 @@ python -m venv .venv
 .venv\Scripts\python main.py
 ```
 
-Dependencias: `customtkinter`, `psutil`, `pystray`, `pillow`
-(opcionales por SO: `wmi`, `pywin32`, `python-xlib`; `cairosvg` solo
-para regenerar el icono desde SVG).
+Dependencias: `customtkinter`, `psutil`, `pystray`, `pillow`, `wmi` y
+`pywin32` (opcionales en Python 3.14); `cairosvg` solo para regenerar el
+icono desde SVG.
 
 ## Compilar el .exe + instalador
 
@@ -341,12 +341,10 @@ artefactos y publica la release automáticamente.
 
 ## Notas por plataforma
 
-- **Windows**: Win32 puro vía ctypes; térmica vía WMI (2 rutas);
+- **Windows 10/11**: Win32 vía ctypes; térmica vía WMI (2 rutas);
   batería vía API nativa → psutil; acciones `shutdown`/`rundll32`.
-- **Linux (LXDE/XFCE)**: idle vía libXss → python-xlib; térmica vía
-  hwmon → /proc/acpi; batería vía sysfs; acciones `systemctl` →
-  `loginctl`; monitor vía `xset q`.
-- **macOS**: acciones vía osascript (experimental).
+- En otros sistemas operativos, el proceso termina sin inicializar la UI
+  ni ejecutar acciones.
 
 ## Verificación (self-test)
 

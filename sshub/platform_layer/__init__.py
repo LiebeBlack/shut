@@ -5,16 +5,14 @@ one worked, so a broken/expensive path is never retried on every poll
 (critical on a Celeron N4120). `probe_capabilities()` runs once at
 startup and the GUI shows what is available.
 
-Chains
-------
-idle      : GetLastInputInfo (Win32) | XScreenSaver libXss | python-xlib
-monitor   : EnumDisplayDevicesW | GetSystemMetrics | None
+Windows chains
+--------------
+idle      : GetLastInputInfo (Win32)
+monitor   : EnumDisplayDevicesW | GetSystemMetrics
 thermal   : WMI MSAcpi_ThermalZoneTemperature | Win32_TemperatureProbe
-            | /sys/class/hwmon | /proc/acpi/thermal_zone
 battery   : GetSystemPowerStatus (ctypes) | psutil.sensors_battery
-            | /sys/class/power_supply
-network   : psutil.net_io_counters | None
-processes : psutil.process_iter | tasklist (Win) | ps (Linux)
+network   : psutil.net_io_counters
+processes : psutil.process_iter | tasklist
 """
 
 from __future__ import annotations
@@ -22,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -560,36 +559,59 @@ def execute_power_action(action: str) -> bool:
     if os.getenv("SSHUB_DRY_RUN") == "1":
         log.info("DRY-RUN: would execute power action '%s'", action)
         return True
+    if action not in {"shutdown", "reboot", "sleep", "hibernate"}:
+        log.error("unsupported power action requested: %r", action)
+        return False
+    if not IS_WINDOWS:
+        log.error("power action requested on unsupported operating system")
+        return False
     try:  # pragma: no cover - real OS paths
         if IS_WINDOWS:
             return _win_power_action(action)
-        if IS_LINUX:
-            return _linux_power_action(action)
-        if IS_MACOS:
-            return _mac_power_action(action)
     except Exception as exc:
         log.error("power action '%s' failed: %s", action, exc)
     return False
 
 
 def _win_power_action(action: str) -> bool:  # pragma: no cover
-    timeout = os.getenv("SSHUB_OS_TIMEOUT", "60")
+    raw_timeout = os.getenv("SSHUB_OS_TIMEOUT", "60")
+    if not re.fullmatch(r"\d{1,5}", raw_timeout):
+        log.warning("invalid SSHUB_OS_TIMEOUT=%r; using 60 seconds", raw_timeout)
+        raw_timeout = "60"
+    timeout = str(min(315360000, max(0, int(raw_timeout))))
+
+    def run(command: list[str]) -> bool:
+        try:
+            completed = subprocess.run(
+                command, check=False, capture_output=True, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if completed.returncode != 0:
+                log.error(
+                    "power command failed rc=%s stderr=%s",
+                    completed.returncode,
+                    completed.stderr.decode(errors="replace").strip(),
+                )
+                return False
+            return True
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.error("power command could not start: %s", exc)
+            return False
+
     if action == "shutdown":
-        os.system(f"shutdown /s /t {timeout}")
-        return True
+        return run(["shutdown", "/s", "/t", timeout])
     if action == "reboot":
-        os.system(f"shutdown /r /t {timeout}")
-        return True
+        return run(["shutdown", "/r", "/t", timeout])
     if action == "sleep":
         # Chain: SetSuspendState (works when hibernate disabled too)
-        os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
-        return True
+        return run([
+            "rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"
+        ])
     if action == "hibernate":
         # Chain: shutdown /h -> SetSuspendState 1,1,0 (hiberate variant)
-        r = os.system("shutdown /h")
-        if r != 0:
-            os.system("rundll32.exe powrprof.dll,SetSuspendState 1,1,0")
-        return True
+        return run(["shutdown", "/h"]) or run([
+            "rundll32.exe", "powrprof.dll,SetSuspendState", "1,1,0"
+        ])
     return False
 
 
@@ -605,8 +627,14 @@ def _linux_power_action(action: str) -> bool:  # pragma: no cover
 
     for cmd in chains.get(action, chains["shutdown"]):
         if shutil.which(cmd[0]):
-            subprocess.run(cmd, check=False)
-            return True
+            try:
+                result = subprocess.run(cmd, check=False, timeout=15)
+            except (OSError, subprocess.SubprocessError) as exc:
+                log.warning("power command %s failed to start: %s", cmd[0], exc)
+                continue
+            if result.returncode == 0:
+                return True
+            log.warning("power command %s exited with %s", cmd[0], result.returncode)
     return False
 
 
@@ -621,14 +649,26 @@ def _mac_power_action(action: str) -> bool:  # pragma: no cover
         "sleep": 'tell app "System Events" to sleep',
         "hibernate": 'tell app "System Events" to sleep',
     }
-    subprocess.run(
-        ["osascript", "-e", scripts.get(action, scripts["shutdown"])],
-        check=False,
-    )
-    return True
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", scripts.get(action, scripts["shutdown"])],
+            check=False, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.error("osascript failed to start: %s", exc)
+        return False
+    return result.returncode == 0
 
 
 def abort_os_shutdown() -> None:
     """Cancel a pending Windows shutdown issued with a timeout."""
     if IS_WINDOWS and os.getenv("SSHUB_DRY_RUN") != "1":  # pragma: no cover
-        os.system("shutdown /a")
+        try:
+            result = subprocess.run(
+                ["shutdown", "/a"], check=False, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if result.returncode != 0:
+                log.warning("shutdown abort exited with %s", result.returncode)
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("shutdown abort failed: %s", exc)

@@ -48,7 +48,8 @@ class EmergencyOverlay(tk.Toplevel):
         ).pack()
 
         tk.Label(
-            container, text=config.ACTION_LABELS.get(action, action),
+            container, text=t(f"act_{action}") if action in config.ACTION_LABELS
+            else action,
             fg="#e8eaf0", bg="#1a1d26", font=("Segoe UI", 12),
         ).pack(pady=(4, 0))
 
