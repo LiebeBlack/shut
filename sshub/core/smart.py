@@ -132,8 +132,17 @@ class SmartSensor:
                 cpu_pct=psutil.cpu_percent(interval=None),
                 ram_pct=psutil.virtual_memory().percent,
             )
-        except Exception:
-            pass
+        except ImportError:
+            self.bus.publish(
+                EventType.LOG,
+                msg="psutil no está disponible; telemetría CPU/RAM omitida",
+            )
+        except Exception as exc:
+            self.bus.publish(
+                EventType.ERROR,
+                sensor=self.name,
+                error=f"CPU/RAM telemetry: {exc}",
+            )
 
         s = SmartSignals()
         s.idle_threshold_s = self.profile.idle_minutes * 60

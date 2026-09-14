@@ -556,15 +556,15 @@ def execute_power_action(action: str) -> bool:
 
     Set SSHUB_DRY_RUN=1 to log instead of touching the OS (tests/dev).
     """
-    if os.getenv("SSHUB_DRY_RUN") == "1":
-        log.info("DRY-RUN: would execute power action '%s'", action)
-        return True
     if action not in {"shutdown", "reboot", "sleep", "hibernate"}:
         log.error("unsupported power action requested: %r", action)
         return False
     if not IS_WINDOWS:
         log.error("power action requested on unsupported operating system")
         return False
+    if os.getenv("SSHUB_DRY_RUN") == "1":
+        log.info("DRY-RUN: would execute power action '%s'", action)
+        return True
     try:  # pragma: no cover - real OS paths
         if IS_WINDOWS:
             return _win_power_action(action)

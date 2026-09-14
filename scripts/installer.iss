@@ -15,7 +15,7 @@ AppId={{8C6F4E5A-2B7D-4E93-9F1A-5C0DEB2001CA}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher=Smart Shutdown Hub Project
-DefaultDirName={autopf}\SmartShutdownHub
+DefaultDirName={localappdata}\Programs\SmartShutdownHub
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\installer
@@ -23,7 +23,7 @@ OutputBaseFilename=SmartShutdownHub-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 WizardStyle=modern
 
 [Languages]

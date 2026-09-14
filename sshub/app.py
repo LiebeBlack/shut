@@ -62,6 +62,7 @@ def main() -> None:
 
     settings = Settings()
     set_language(settings.get("language") or detect_language())
+    log.info("hardware tuning profile: %s", config.apply_hardware_tuning())
 
     # SSE4.2 capability gate: without it, relax the Smart telemetry
     # cadence to protect entry-level CPUs. Everything else is unchanged.
@@ -87,6 +88,7 @@ def main() -> None:
         quit_cb=lambda: _quit(window, tray),
         tooltip=f"{config.APP_NAME} v{config.APP_VERSION}",
     )
+    window._tray_available = tray.available
     tray.start()
 
     def _sig(_n, _f) -> None:

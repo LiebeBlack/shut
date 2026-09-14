@@ -15,6 +15,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 APP_NAME = "Smart Shutdown Hub"
 APP_VERSION = "1.0.0"
+WINDOWS_MIN_VERSION = (10, 0)
 
 # Portable-friendly data dir: %LOCALAPPDATA%/SmartShutdownHub, or ./data
 def default_data_dir() -> Path:
@@ -68,6 +69,36 @@ IDLE_POLL_S = 5.0              # GetLastInputInfo / XScreenSaver poll
 MONITOR_POLL_S = 4.0
 MONITOR_OFF_DEBOUNCE_S = 10    # display off for N seconds before firing
 
+# Intel entry-level tuning. These values keep background polling light on
+# Celeron/Pentium/Atom machines while preserving one-second timer accuracy.
+INTEL_LOW_POWER_KEYWORDS = ("celeron", "pentium", "atom")
+LOW_POWER_PROFILE = {
+    "engine_tick_s": 1.25,
+    "sensor_slow_tick_s": 15.0,
+    "smart_tick_s": 3.0,
+    "gui_poll_ms": 300,
+    "hub_poll_s": 8.0,
+}
+
+
+def apply_hardware_tuning() -> str:
+    """Apply conservative polling for Intel low-power Windows CPUs.
+
+    Returns the selected profile name for startup logging. Environment
+    overrides are intentionally avoided so the packaged app stays predictable.
+    """
+    identifier = os.environ.get("PROCESSOR_IDENTIFIER", "").lower()
+    if any(keyword in identifier for keyword in INTEL_LOW_POWER_KEYWORDS):
+        global ENGINE_TICK_S, SENSOR_SLOW_TICK_S, SMART_TICK_S
+        global GUI_POLL_MS, HUB_POLL_S
+        ENGINE_TICK_S = LOW_POWER_PROFILE["engine_tick_s"]
+        SENSOR_SLOW_TICK_S = LOW_POWER_PROFILE["sensor_slow_tick_s"]
+        SMART_TICK_S = LOW_POWER_PROFILE["smart_tick_s"]
+        GUI_POLL_MS = LOW_POWER_PROFILE["gui_poll_ms"]
+        HUB_POLL_S = LOW_POWER_PROFILE["hub_poll_s"]
+        return "intel-low-power"
+    return "standard"
+
 # --------------------------------------------------------------------------- #
 # Database defaults
 # --------------------------------------------------------------------------- #
@@ -104,3 +135,7 @@ MODE_LABELS = {
 
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# Apply before sensor classes cache their cadence constants.
+apply_hardware_tuning()

@@ -264,6 +264,10 @@ Ajustes de usuario (`settings.json`, escritura atómica): `language`,
 `start_minimized`, `dry_run_default`, `hub_enabled`, `network_debounce_s`,
 `accent`. Un archivo corrupto se renombra `.corrupt` y se reconstruye.
 
+En Windows, los Intel Celeron, Pentium y Atom activan automáticamente un
+perfil de bajo consumo: reduce el sondeo lento y Smart sin afectar la
+precisión del temporizador. El resto de equipos usa el perfil estándar.
+
 ## Optimización SSE4.2
 
 - **Detección**: `platform_layer.cpu_flags()`/`cpu_sse4_2()` leen
@@ -323,6 +327,9 @@ powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
 iscc scripts\installer.iss
 # → installer\SmartShutdownHub-Setup-1.0.0.exe
 ```
+
+El instalador es por usuario, no requiere administrador y coloca la
+aplicación en `%LOCALAPPDATA%\Programs\SmartShutdownHub`.
 
 O empuja un tag `v*`: el workflow de GitHub Actions genera ambos
 artefactos y publica la release automáticamente.

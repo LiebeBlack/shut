@@ -80,6 +80,7 @@ class MainWindow(ctk.CTk):
         self._toast: Toast | None = None
         self._settings_win: ctk.CTkToplevel | None = None
         self._badge: CountdownBadge | None = None
+        self._tray_available = True
         self._badge_enabled = bool(settings.get("countdown_overlay"))
         self._timer_remaining: float | None = None
         self._dry_run = bool(settings.get("dry_run_default"))
@@ -961,6 +962,9 @@ class MainWindow(ctk.CTk):
     def _on_close_request(self) -> None:
         with contextlib.suppress(Exception):
             self._settings.set("window_geometry", self.geometry())
+        if not self._tray_available:
+            self.shutdown()
+            return
         self.withdraw()
 
     # ------------------------------------------------------------------ #
