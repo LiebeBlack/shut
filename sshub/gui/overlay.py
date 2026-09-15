@@ -108,7 +108,7 @@ class EmergencyOverlay(tk.Toplevel):
             self.focus_set()
         self._countdown_lbl.configure(text=str(self._remaining))
         self._tick_id = self.after(1000, self._tick)
-        self.after(80, self._draw_bar)  # repaint once geometry is known
+        self._bar_id = self.after(80, self._draw_bar)  # geometry repaint
 
     def _draw_bar(self) -> None:
         """Render the depletion bar at the current remaining fraction."""
@@ -143,10 +143,11 @@ class EmergencyOverlay(tk.Toplevel):
         self._close()
 
     def _close(self) -> None:
-        if hasattr(self, "_tick_id") and self._tick_id:
-            with contextlib.suppress(Exception):
-                self.after_cancel(self._tick_id)
-            self._tick_id = None
+        for attr in ("_tick_id", "_bar_id"):
+            if hasattr(self, attr) and getattr(self, attr):
+                with contextlib.suppress(Exception):
+                    self.after_cancel(getattr(self, attr))
+                setattr(self, attr, None)
         with contextlib.suppress(Exception):
             self.grab_release()
         with contextlib.suppress(Exception):

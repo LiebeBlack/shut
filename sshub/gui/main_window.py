@@ -1159,6 +1159,12 @@ class MainWindow(ctk.CTk):
             if not self._closing:
                 try:
                     if self.winfo_exists():
+                        if self._drain_after_id:
+                            # cancel-before-schedule: manual drain calls
+                            # (tests, deterministic paths) must not leak
+                            # pending after-callbacks into a dead app
+                            with contextlib.suppress(Exception):
+                                self.after_cancel(self._drain_after_id)
                         self._drain_after_id = self.after(
                             config.GUI_POLL_MS, self._drain_events
                         )
