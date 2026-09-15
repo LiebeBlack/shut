@@ -1,5 +1,5 @@
-"""Main window v2: dark cockpit with live dashboard, toasts, accordion
-sections, language switch, settings menu, import/export, i18n labels.
+"""Main window v2: modern dark cockpit with distributed layout, live telemetry,
+toasts, structured accordions, bilingual support and leak-free event draining.
 """
 
 from __future__ import annotations
@@ -23,24 +23,25 @@ from .toast import Toast
 
 
 class AccordionSection(ctk.CTkFrame):
-    """Collapsible section: keeps advanced options out of the way."""
+    """Collapsible section with modern header and smooth expand/collapse."""
 
     def __init__(self, master, title: str, expanded: bool = True) -> None:
-        super().__init__(master, fg_color="#1b1f2a", corner_radius=12)
+        super().__init__(master, fg_color="#181c26", corner_radius=12,
+                         border_width=1, border_color="#242938")
         self._expanded = expanded
         self._title = title
         self._header = ctk.CTkButton(
             self, text=f"{'▾' if expanded else '▸'}  {title}",
-            fg_color="transparent", hover_color="#232936",
+            fg_color="transparent", hover_color="#222838",
             text_color="#e8eaf0", font=("Segoe UI", 12, "bold"),
-            anchor="w", command=self.toggle,
+            anchor="w", command=self.toggle, height=36,
         )
         self._header.pack(fill="x", padx=6, pady=(4, 0))
         self._header.bind("<Return>", lambda _event: self.toggle())
         self._header.bind("<space>", lambda _event: self.toggle())
         self.body = ctk.CTkFrame(self, fg_color="transparent")
         if expanded:
-            self.body.pack(fill="x", padx=6, pady=(0, 6))
+            self.body.pack(fill="x", padx=8, pady=(0, 8))
 
     def toggle(self) -> None:
         self._expanded = not self._expanded
@@ -48,7 +49,7 @@ class AccordionSection(ctk.CTkFrame):
             text=f"{'▾' if self._expanded else '▸'}  {self._title}"
         )
         if self._expanded:
-            self.body.pack(fill="x", padx=6, pady=(0, 6))
+            self.body.pack(fill="x", padx=8, pady=(0, 8))
         else:
             self.body.pack_forget()
 
@@ -85,6 +86,8 @@ class MainWindow(ctk.CTk):
         self._timer_remaining: float | None = None
         self._dry_run = bool(settings.get("dry_run_default"))
         self._old_none_proc = t("none_proc")
+        self._drain_after_id: str | None = None
+        self._closing = False
         if self._dry_run:
             os.environ["SSHUB_DRY_RUN"] = "1"  # honor saved dry-run at boot
 
@@ -96,11 +99,11 @@ class MainWindow(ctk.CTk):
 
         self.title(f"{config.APP_NAME} — {config.APP_VERSION}")
         self._apply_geometry()
-        self.configure(fg_color="#14171f")
+        self.configure(fg_color="#12151c")
         self._set_window_icon()
         self._build_ui()
         self._reload_profiles()
-        self.after(config.GUI_POLL_MS, self._drain_events)
+        self._drain_after_id = self.after(config.GUI_POLL_MS, self._drain_events)
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._fullscreen = False
         self.bind("<F11>", lambda _e: self._toggle_fullscreen())
@@ -119,11 +122,8 @@ class MainWindow(ctk.CTk):
     def _apply_geometry(self) -> None:
         """Restore the saved geometry, or center an adaptive default.
 
-        Height adapts to the screen (netbook 768 px vs 1080 px desktop)
-        and a remembered geometry from another monitor is ignored when it
-        no longer fits. NOTE: `geometry()` MUST run before `minsize()`:
-        customtkinter 6 reads `_current_width` there and it is only set
-        by `geometry()` (a None comparison would raise TypeError).
+        Height adapts to the screen and remembered geometry from another
+        monitor is validated to ensure it fits.
         """
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         saved = str(self._settings.get("window_geometry") or "")
@@ -138,13 +138,13 @@ class MainWindow(ctk.CTk):
             except (ValueError, IndexError):
                 geo = ""
         if not geo:
-            w = 580
-            h = min(720, max(600, sh - 100))
+            w = 640
+            h = min(740, max(620, sh - 100))
             x = max(0, (sw - w) // 2)
             y = max(0, (sh - h) // 2 - 24)
             geo = f"{w}x{h}+{x}+{y}"
         self.geometry(geo)
-        self.minsize(540, min(640, max(560, sh - 120)))
+        self.minsize(580, min(640, max(560, sh - 120)))
 
     def _set_window_icon(self) -> None:
         """Taskbar/titlebar icon: sshub.ico on Windows, PhotoImage elsewhere."""
@@ -166,19 +166,20 @@ class MainWindow(ctk.CTk):
     # UI construction
     # ------------------------------------------------------------------ #
     def _build_ui(self) -> None:
-        # Whole UI lives in a scrollable frame: on small screens nothing
-        # is ever clipped — wheel + scrollbar reach every function.
+        # Whole UI lives in a scrollable frame: responsive across screen sizes
         self._scroll = ctk.CTkScrollableFrame(
-            self, width=560, height=480, fg_color="transparent",
+            self, width=640, height=520, fg_color="transparent",
             corner_radius=0,
         )
-        self._scroll.pack(fill="both", expand=True, padx=8, pady=(6, 10))
+        self._scroll.pack(fill="both", expand=True, padx=10, pady=(6, 10))
 
+        # -- Top Bar / Header -------------------------------------------- #
         header = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(12, 2))
+        header.pack(fill="x", padx=12, pady=(10, 2))
+
         ctk.CTkLabel(
             header, text="⏻ SMART SHUTDOWN HUB",
-            font=("Segoe UI", 19, "bold"), text_color="#00e5a0",
+            font=("Segoe UI", 18, "bold"), text_color="#00e5a0",
         ).pack(side="left")
 
         self._status_dot = ctk.CTkLabel(
@@ -189,109 +190,135 @@ class MainWindow(ctk.CTk):
 
         self._tagline = ctk.CTkLabel(
             self._scroll, text=t("app_tagline"), font=("Segoe UI", 10),
-            text_color="#5c6478",
+            text_color="#7b849b",
         )
-        self._tagline.pack(anchor="w", padx=18)
+        self._tagline.pack(anchor="w", padx=14, pady=(0, 6))
 
-        # -- Menu row ---------------------------------------------------- #
+        # -- Menu / Toolbar row ------------------------------------------ #
         menu_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        menu_row.pack(fill="x", padx=16, pady=(8, 2))
+        menu_row.pack(fill="x", padx=12, pady=(0, 6))
+
         self._menu_btn = ctk.CTkButton(
-            menu_row, text=t("menu"), width=104, height=34,
-            fg_color="#1b1f2a", hover_color="#232936",
+            menu_row, text=t("menu"), width=100, height=32,
+            fg_color="#1b1f2a", hover_color="#242b3b",
             command=self._open_menu,
         )
         self._menu_btn.pack(side="left")
+
         self._fullscreen_btn = ctk.CTkButton(
-            menu_row, text=t("fullscreen"), width=132, height=34,
-            fg_color="#1b1f2a",
-            hover_color="#232936", command=self._toggle_fullscreen,
+            menu_row, text=t("fullscreen"), width=130, height=32,
+            fg_color="#1b1f2a", hover_color="#242b3b",
+            command=self._toggle_fullscreen,
         )
         self._fullscreen_btn.pack(side="left", padx=(6, 0))
+
         self._badge_btn = ctk.CTkButton(
-            menu_row, text="⏱  Badge", width=92, height=34,
-            fg_color="#1b1f2a",
-            hover_color="#232936", command=self._toggle_badge,
+            menu_row, text="⏱  Badge", width=96, height=32,
+            fg_color="#2d3446" if self._badge_enabled else "#1b1f2a",
+            hover_color="#242b3b", command=self._toggle_badge,
         )
         self._badge_btn.pack(side="left", padx=(6, 0))
+
         self._dry_var = ctk.StringVar(
             value=("🧪 " + t("dry_run")) if self._dry_run else ""
         )
-        ctk.CTkLabel(menu_row, textvariable=self._dry_var,
-                     text_color="#ffd166").pack(side="left", padx=10)
+        ctk.CTkLabel(
+            menu_row, textvariable=self._dry_var, font=("Segoe UI", 10, "bold"),
+            text_color="#ffd166",
+        ).pack(side="left", padx=(10, 0))
 
-        # -- Dashboard (live telemetry) ---------------------------------- #
-        dash = ctk.CTkFrame(self._scroll, fg_color="#10131b", corner_radius=14,
-                            border_width=1, border_color="#232936")
-        dash.pack(fill="x", padx=16, pady=8)
+        # -- Dashboard (Hero telemetry & AI Advice) ----------------------- #
+        dash = ctk.CTkFrame(
+            self._scroll, fg_color="#10131b", corner_radius=14,
+            border_width=1, border_color="#202534",
+        )
+        dash.pack(fill="x", padx=12, pady=6)
+
+        score_row = ctk.CTkFrame(dash, fg_color="transparent")
+        score_row.pack(fill="x", padx=14, pady=(10, 4))
+
         self._dash_score = ctk.CTkLabel(
-            dash, text="🧠 —", font=("Segoe UI", 22, "bold"),
+            score_row, text="🧠 —", font=("Segoe UI", 22, "bold"),
             text_color="#5c6478",
         )
-        self._dash_score.pack(side="left", padx=(16, 8), pady=(12, 8))
+        self._dash_score.pack(side="left", padx=(0, 10))
+
         self._dash_why = ctk.CTkLabel(
-            dash, text="", font=("Segoe UI", 9), text_color="#5c6478",
-            justify="left", anchor="w", wraplength=360,
+            score_row, text="", font=("Segoe UI", 10), text_color="#7b849b",
+            justify="left", anchor="w", wraplength=440,
         )
-        self._dash_why.pack(side="left", fill="x", expand=True, pady=(12, 8))
+        self._dash_why.pack(side="left", fill="x", expand=True)
+
         self._dash_advice = ctk.CTkLabel(
-            dash, text="", font=("Segoe UI", 9), text_color="#7f9cf5",
-            justify="left", anchor="w", cursor="hand2", wraplength=500,
+            dash, text="", font=("Segoe UI", 10, "bold"), text_color="#7f9cf5",
+            justify="left", anchor="w", cursor="hand2", wraplength=540,
         )
-        # Not packed yet: the row only appears when a verdict arrives.
+        # Packed dynamically when advice is available
         self._dash_advice.bind("<Button-1>", lambda _e: self._on_advice_click())
 
         tiles = ctk.CTkFrame(dash, fg_color="transparent")
         self._tiles_frame = tiles
-        tiles.pack(fill="x", padx=10, pady=(0, 8))
+        tiles.pack(fill="x", padx=12, pady=(4, 10))
+
         self._tiles: dict[str, ctk.CTkLabel] = {}
         for key in ("cpu", "ram", "temp", "batt"):
-            lbl = ctk.CTkLabel(
-                tiles, text=f"{t(key)} —", font=("Consolas", 11),
-                text_color="#8b93a7",
+            tile_card = ctk.CTkFrame(
+                tiles, fg_color="#171b26", corner_radius=8,
+                border_width=1, border_color="#242a38",
             )
-            lbl.pack(side="left", expand=True, padx=4)
+            tile_card.pack(side="left", fill="x", expand=True, padx=4)
+            lbl = ctk.CTkLabel(
+                tile_card, text=f"{t(key)} —", font=("Consolas", 11, "bold"),
+                text_color="#8b93a7", pady=4,
+            )
+            lbl.pack(fill="both", expand=True)
             self._tiles[key] = lbl
 
         # -- Profile selector ------------------------------------------- #
-        sel = ctk.CTkFrame(self._scroll, fg_color="#1b1f2a", corner_radius=12,
-                           border_width=1, border_color="#232936")
-        sel.pack(fill="x", padx=16, pady=8)
-        self._profile_lbl = ctk.CTkLabel(
-            sel, text=t("profile"), font=("Segoe UI", 12, "bold")
+        sel = ctk.CTkFrame(
+            self._scroll, fg_color="#181c26", corner_radius=12,
+            border_width=1, border_color="#242938",
         )
-        self._profile_lbl.pack(anchor="w", padx=12, pady=(8, 0))
-        row = ctk.CTkFrame(sel, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=(2, 10))
+        sel.pack(fill="x", padx=12, pady=6)
+
+        sel_row = ctk.CTkFrame(sel, fg_color="transparent")
+        sel_row.pack(fill="x", padx=12, pady=8)
+
+        self._profile_lbl = ctk.CTkLabel(
+            sel_row, text=t("profile"), font=("Segoe UI", 12, "bold")
+        )
+        self._profile_lbl.pack(side="left", padx=(0, 10))
+
         self._profile_var = ctk.StringVar()
         self._profile_menu = ctk.CTkOptionMenu(
-            row, variable=self._profile_var, command=self._on_profile_selected,
+            sel_row, variable=self._profile_var, command=self._on_profile_selected,
             fg_color="#232936", button_color="#2d3446",
             button_hover_color="#39415a", text_color="#e8eaf0",
-            width=240, height=34,
+            height=32,
         )
         self._profile_menu.pack(side="left", fill="x", expand=True)
+
         self._add_profile_btn = ctk.CTkButton(
-            row, text=t("new"), width=78, height=34, command=self._on_add_profile,
-                      fg_color="#2d3446", hover_color="#39415a"
+            sel_row, text=t("new"), width=78, height=32, command=self._on_add_profile,
+            fg_color="#2d3446", hover_color="#39415a",
         )
-        self._add_profile_btn.pack(side="left", padx=6)
+        self._add_profile_btn.pack(side="left", padx=(8, 4))
+
         self._delete_profile_btn = ctk.CTkButton(
-            row, text=t("delete"), width=78, height=34,
+            sel_row, text=t("delete"), width=78, height=32,
             command=self._on_delete_profile,
-                      fg_color="#2d3446", hover_color="#5a2d34"
+            fg_color="#2d3446", hover_color="#5a2d34",
         )
         self._delete_profile_btn.pack(side="left")
 
-        # -- Accordion: trigger conditions ------------------------------- #
+        # -- Accordion: trigger conditions (distributed 2-column grid) -- #
         self._acc_triggers = AccordionSection(
             self._scroll, f"⚡ {t('sec_triggers')}"
         )
-        self._acc_triggers.pack(fill="x", padx=16, pady=4)
+        self._acc_triggers.pack(fill="x", padx=12, pady=4)
         body = self._acc_triggers.body
 
         self._mode_var = ctk.StringVar(value=t("mode_absolute"))
-        # translated label -> profile mode code
         self._mode_values = {
             t("mode_absolute"): "absolute",
             t("mode_idle"): "idle",
@@ -302,84 +329,105 @@ class MainWindow(ctk.CTk):
             t("mode_hybrid"): "hybrid",
         }
         self._mode_radios: list[ctk.CTkRadioButton] = []
-        for label in self._mode_values:
+
+        modes_grid = ctk.CTkFrame(body, fg_color="transparent")
+        modes_grid.pack(fill="x", padx=8, pady=(4, 8))
+        modes_grid.grid_columnconfigure((0, 1), weight=1)
+
+        modes_list = list(self._mode_values.keys())
+        for idx, label in enumerate(modes_list):
+            r = idx if idx < 4 else (idx - 4)
+            c = 0 if idx < 4 else 1
             radio = ctk.CTkRadioButton(
-                body, text=label, variable=self._mode_var, value=label,
+                modes_grid, text=label, variable=self._mode_var, value=label,
                 fg_color="#00e5a0", hover_color="#00c08a",
             )
-            radio.pack(anchor="w", padx=16, pady=3)
+            radio.grid(row=r, column=c, sticky="w", padx=8, pady=3)
             self._mode_radios.append(radio)
 
-        t_ = ctk.CTkFrame(body, fg_color="transparent")
-        t_.pack(fill="x", padx=14, pady=6)
-        self._lbl_countdown = ctk.CTkLabel(t_, text=t("countdown_min"))
-        self._lbl_countdown.grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self._countdown_entry = ctk.CTkEntry(t_, width=70, justify="center")
-        self._countdown_entry.insert(0, "0")
-        self._countdown_entry.grid(row=0, column=1, sticky="w")
-        self._lbl_at_time = ctk.CTkLabel(t_, text=t("at_time"))
-        self._lbl_at_time.grid(row=0, column=2, sticky="w", padx=(20, 8))
-        self._at_time_entry = ctk.CTkEntry(
-            t_, width=70, justify="center", placeholder_text="22:30"
+        inputs_box = ctk.CTkFrame(
+            body, fg_color="#12151e", corner_radius=10,
+            border_width=1, border_color="#202534",
         )
-        self._at_time_entry.grid(row=0, column=3, sticky="w")
-        t_.grid_columnconfigure(0, weight=1)
+        inputs_box.pack(fill="x", padx=8, pady=6)
+        inputs_box.grid_columnconfigure((0, 2), weight=0)
+        inputs_box.grid_columnconfigure((1, 3), weight=1)
 
-        i_ = ctk.CTkFrame(body, fg_color="transparent")
-        i_.pack(fill="x", padx=14, pady=6)
-        self._lbl_idle = ctk.CTkLabel(i_, text=t("idle_min"))
-        self._lbl_idle.grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self._idle_entry = ctk.CTkEntry(i_, width=70, justify="center")
+        self._lbl_countdown = ctk.CTkLabel(inputs_box, text=t("countdown_min"))
+        self._lbl_countdown.grid(row=0, column=0, sticky="w", padx=(12, 6), pady=6)
+        self._countdown_entry = ctk.CTkEntry(inputs_box, width=70, justify="center")
+        self._countdown_entry.insert(0, "0")
+        self._countdown_entry.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=6)
+
+        self._lbl_at_time = ctk.CTkLabel(inputs_box, text=t("at_time"))
+        self._lbl_at_time.grid(row=0, column=2, sticky="w", padx=(12, 6), pady=6)
+        self._at_time_entry = ctk.CTkEntry(
+            inputs_box, width=70, justify="center", placeholder_text="22:30"
+        )
+        self._at_time_entry.grid(row=0, column=3, sticky="w", padx=(0, 12), pady=6)
+
+        self._lbl_idle = ctk.CTkLabel(inputs_box, text=t("idle_min"))
+        self._lbl_idle.grid(row=1, column=0, sticky="w", padx=(12, 6), pady=(0, 8))
+        self._idle_entry = ctk.CTkEntry(inputs_box, width=70, justify="center")
         self._idle_entry.insert(0, "30")
-        self._idle_entry.grid(row=0, column=1, sticky="w")
-        i_.grid_columnconfigure(0, weight=1)
+        self._idle_entry.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
-        # -- Accordion: advanced ---------------------------------------- #
+        # -- Accordion: advanced (2-column balanced grid) ---------------- #
         self._acc_advanced = AccordionSection(
             self._scroll, f"🎛 {t('sec_advanced')}"
         )
-        self._acc_advanced.pack(fill="x", padx=16, pady=4)
+        self._acc_advanced.pack(fill="x", padx=12, pady=4)
         adv = self._acc_advanced.body
 
-        self._slider_row(adv, t("net_threshold"), "50 KB/s", 1, 2000, 199, 50,
+        adv_grid = ctk.CTkFrame(adv, fg_color="transparent")
+        adv_grid.pack(fill="x", padx=4, pady=4)
+        adv_grid.grid_columnconfigure((0, 1), weight=1)
+
+        col_left = ctk.CTkFrame(adv_grid, fg_color="transparent")
+        col_left.grid(row=0, column=0, sticky="nsew", padx=6)
+        col_right = ctk.CTkFrame(adv_grid, fg_color="transparent")
+        col_right.grid(row=0, column=1, sticky="nsew", padx=6)
+
+        self._slider_row(col_left, t("net_threshold"), "50 KB/s", 1, 2000, 199, 50,
                          " KB/s", "_net")
-        self._slider_row(adv, t("debounce"), "120 s", 5, 600, 119, 120,
+        self._slider_row(col_left, t("debounce"), "120 s", 5, 600, 119, 120,
                          " s", "_deb")
-        self._slider_row(adv, t("thermal_max"), "90 °C", 60, 105, 45, 90,
+        self._slider_row(col_right, t("thermal_max"), "90 °C", 60, 105, 45, 90,
                          " °C", "_temp")
-        self._slider_row(adv, t("battery_min"), "10 %", 5, 50, 45, 10,
+        self._slider_row(col_right, t("battery_min"), "10 %", 5, 50, 45, 10,
                          " %", "_batt")
 
         # -- Accordion: process watcher --------------------------------- #
         self._acc_proc = AccordionSection(
             self._scroll, f"🔎 {t('sec_process')}"
         )
-        self._acc_proc.pack(fill="x", padx=16, pady=4)
+        self._acc_proc.pack(fill="x", padx=12, pady=4)
         prow = ctk.CTkFrame(self._acc_proc.body, fg_color="transparent")
-        prow.pack(fill="x", padx=14, pady=6)
+        prow.pack(fill="x", padx=10, pady=6)
         self._proc_var = ctk.StringVar(value=t("none_proc"))
         self._proc_menu = ctk.CTkOptionMenu(
-            prow, variable=self._proc_var, width=260,
+            prow, variable=self._proc_var, width=280, height=32,
             fg_color="#232936", button_color="#2d3446",
             button_hover_color="#39415a",
         )
         self._proc_menu.pack(side="left", fill="x", expand=True)
         self._refresh_proc_btn = ctk.CTkButton(
-            prow, text="⟳", width=42, height=34, command=self._refresh_processes,
-                      fg_color="#2d3446", hover_color="#39415a"
+            prow, text="⟳", width=42, height=32, command=self._refresh_processes,
+            fg_color="#2d3446", hover_color="#39415a",
         )
         self._refresh_proc_btn.pack(side="left", padx=(8, 0))
 
-        # -- Action + arm ------------------------------------------------ #
+        # -- Action & Arm Section ---------------------------------------- #
         act = ctk.CTkFrame(
-            self._scroll, fg_color="#1b1f2a", corner_radius=12,
-            border_width=1, border_color="#232936",
+            self._scroll, fg_color="#181c26", corner_radius=12,
+            border_width=1, border_color="#242938",
         )
-        act.pack(fill="x", padx=16, pady=8)
+        act.pack(fill="x", padx=12, pady=6)
+
         self._action_lbl = ctk.CTkLabel(
-            act, text=t("action_label"), font=("Segoe UI", 12)
+            act, text=t("action_label"), font=("Segoe UI", 12, "bold")
         )
-        self._action_lbl.pack(anchor="w", padx=12, pady=(8, 0))
+        self._action_lbl.pack(anchor="w", padx=12, pady=(8, 4))
         self._action_values = {t(f"act_{k}"): k for k in config.ACTION_LABELS}
         self._action_var = ctk.StringVar()
         seg = ctk.CTkSegmentedButton(
@@ -387,12 +435,11 @@ class MainWindow(ctk.CTk):
             variable=self._action_var,
             selected_color="#00e5a0", selected_hover_color="#00c08a",
             fg_color="#232936", unselected_color="#232936",
-            text_color="#e8eaf0",
+            text_color="#e8eaf0", height=34,
         )
-        # ACTION_LABELS keys are codes; add act_* strings for i18n:
         self._action_seg = seg
         seg.set(next(iter(self._action_values)))
-        seg.pack(fill="x", padx=12, pady=(2, 6))
+        seg.pack(fill="x", padx=12, pady=(0, 10))
 
         self._arm_btn = ctk.CTkButton(
             self._scroll, text=t("arm"), height=48,
@@ -400,59 +447,75 @@ class MainWindow(ctk.CTk):
             fg_color="#00e5a0", hover_color="#00c08a", text_color="#0b0d12",
             command=self._on_arm,
         )
-        self._arm_btn.pack(fill="x", padx=16, pady=(8, 8))
+        self._arm_btn.pack(fill="x", padx=12, pady=(6, 8))
         self._arm_btn.bind("<Return>", lambda _event: self._on_arm())
 
         # -- Telemetry console ------------------------------------------- #
         self._acc_log = AccordionSection(
             self._scroll, f"📡 {t('sec_telemetry')}", expanded=False
         )
-        self._acc_log.pack(fill="x", padx=16, pady=(2, 12))
+        self._acc_log.pack(fill="x", padx=12, pady=(2, 10))
+
+        log_bar = ctk.CTkFrame(self._acc_log.body, fg_color="transparent")
+        log_bar.pack(fill="x", padx=6, pady=(0, 4))
+        ctk.CTkButton(
+            log_bar, text="🗑 Limpiar", width=74, height=24,
+            font=("Segoe UI", 10), fg_color="#232936", hover_color="#39415a",
+            command=self._clear_log,
+        ).pack(side="right")
+
         self._log_box = ctk.CTkTextbox(
-            self._acc_log.body, height=140, fg_color="#0f1218",
+            self._acc_log.body, height=130, fg_color="#0f1218",
             text_color="#8b93a7", font=("Consolas", 10),
         )
-        self._log_box.pack(fill="both", expand=True)
+        self._log_box.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        self._log_box.configure(state="disabled")
+
+    def _clear_log(self) -> None:
+        self._log_box.configure(state="normal")
+        self._log_box.delete("1.0", "end")
         self._log_box.configure(state="disabled")
 
     def _slider_row(self, parent, label, init, frm, to, steps, val, unit, tag):
-        title = ctk.CTkLabel(parent, text=label)
-        title.pack(anchor="w", padx=16, pady=(4, 0))
+        title = ctk.CTkLabel(parent, text=label, font=("Segoe UI", 11))
+        title.pack(anchor="w", padx=12, pady=(4, 0))
         setattr(self, f"{tag}_title", title)
-        lbl = ctk.CTkLabel(parent, text=init, text_color="#00e5a0")
-        lbl.pack(anchor="w", padx=16)
+        lbl = ctk.CTkLabel(parent, text=init, text_color="#00e5a0", font=("Segoe UI", 11, "bold"))
+        lbl.pack(anchor="w", padx=12)
         slider = ctk.CTkSlider(
             parent, from_=frm, to=to, number_of_steps=steps,
             command=lambda v: lbl.configure(text=f"{int(float(v))}{unit}"),
         )
         slider.set(val)
-        slider.pack(fill="x", padx=16, pady=(0, 8))
+        slider.pack(fill="x", padx=12, pady=(0, 8))
         setattr(self, f"{tag}_slider", slider)
         setattr(self, f"{tag}_lbl", lbl)
 
     # ------------------------------------------------------------------ #
-    # Menu (settings)
+    # Menu (settings modal)
     # ------------------------------------------------------------------ #
     def _open_menu(self) -> None:
         if self._settings_win is not None and self._settings_win.winfo_exists():
-            # No lift() here: raising a grabbed toplevel and later
-            # destroying it can crash Tcl 9 (Python 3.14) on Windows.
             self._settings_win.deiconify()
             self._settings_win.focus_force()
             return  # singleton: never stack two settings windows
         top = ctk.CTkToplevel(self)
         self._settings_win = top
         top.title(t("settings"))
-        top.geometry("380x430")  # tall enough on small screens
+        top.geometry("420x520")
+        top.minsize(380, 460)
         top.configure(fg_color="#14171f")
         top.transient(self)
         top.grab_set()
 
         ctk.CTkLabel(top, text=t("settings"),
-                     font=("Segoe UI", 15, "bold")).pack(pady=(14, 6))
+                     font=("Segoe UI", 15, "bold")).pack(pady=(12, 6))
 
-        # Language
-        ctk.CTkLabel(top, text=t("language")).pack()
+        # Group 1: General & Idioma
+        g1 = ctk.CTkFrame(top, fg_color="#181c26", corner_radius=10,
+                          border_width=1, border_color="#242938")
+        g1.pack(fill="x", padx=14, pady=4)
+        ctk.CTkLabel(g1, text=t("language"), font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
         langs = {"Español": "es", "English": "en"}
         lang_var = ctk.StringVar(
             value=next((k for k, v in langs.items()
@@ -460,67 +523,60 @@ class MainWindow(ctk.CTk):
                                  or detect_language())), "Español")
         )
         seg = ctk.CTkSegmentedButton(
-            top, values=list(langs), variable=lang_var,
+            g1, values=list(langs), variable=lang_var,
             command=lambda v: self._on_language(langs[v]),
             fg_color="#232936", selected_color="#00e5a0",
         )
-        seg.pack(pady=4)
+        seg.pack(fill="x", padx=12, pady=4)
 
-        # Start minimized
-        self._min_var = ctk.BooleanVar(
-            value=bool(self._settings.get("start_minimized"))
-        )
+        self._min_var = ctk.BooleanVar(value=bool(self._settings.get("start_minimized")))
         ctk.CTkSwitch(
-            top, text=t("start_minimized"), variable=self._min_var,
+            g1, text=t("start_minimized"), variable=self._min_var,
             command=self._on_toggle_minimized,
-        ).pack(pady=6)
+        ).pack(anchor="w", padx=12, pady=(6, 8))
 
-        # Dry run
+        # Group 2: Modos de Asistencia
+        g2 = ctk.CTkFrame(top, fg_color="#181c26", corner_radius=10,
+                          border_width=1, border_color="#242938")
+        g2.pack(fill="x", padx=14, pady=4)
+
         self._dry_switch_var = ctk.BooleanVar(value=self._dry_run)
         ctk.CTkSwitch(
-            top, text=t("dry_run"), variable=self._dry_switch_var,
-            command=self._on_toggle_dry,
-            progress_color="#ffd166",
-        ).pack(pady=6)
+            g2, text=t("dry_run"), variable=self._dry_switch_var,
+            command=self._on_toggle_dry, progress_color="#ffd166",
+        ).pack(anchor="w", padx=12, pady=(8, 4))
 
-        # Intelligence Hub (advisory AI layer)
-        self._hub_var = ctk.BooleanVar(
-            value=bool(self._hub and self._hub.enabled)
-        )
+        self._hub_var = ctk.BooleanVar(value=bool(self._hub and self._hub.enabled))
         ctk.CTkSwitch(
-            top, text=t("hub"), variable=self._hub_var,
-            command=self._on_toggle_hub,
-            progress_color="#7f9cf5",
-        ).pack(pady=6)
+            g2, text=t("hub"), variable=self._hub_var,
+            command=self._on_toggle_hub, progress_color="#7f9cf5",
+        ).pack(anchor="w", padx=12, pady=4)
 
-        # Corner countdown badge
         self._badge_var = ctk.BooleanVar(value=self._badge_enabled)
         ctk.CTkSwitch(
-            top, text=t("countdown_badge"), variable=self._badge_var,
-            command=self._on_toggle_badge_switch,
-            progress_color="#ffd166",
-        ).pack(pady=6)
+            g2, text=t("countdown_badge"), variable=self._badge_var,
+            command=self._on_toggle_badge_switch, progress_color="#ffd166",
+        ).pack(anchor="w", padx=12, pady=(4, 8))
+
+        # Group 3: Datos e Integración
+        g3 = ctk.CTkFrame(top, fg_color="#181c26", corner_radius=10,
+                          border_width=1, border_color="#242938")
+        g3.pack(fill="x", padx=14, pady=4)
+
         from ..platform_layer import cpu_sse4_2
-
         ctk.CTkLabel(
-            top, text=t("sse_report", ok="✓" if cpu_sse4_2() else "✗"),
-            text_color="#5c6478",
-        ).pack(pady=2)
+            g3, text=t("sse_report", ok="✓" if cpu_sse4_2() else "✗"),
+            text_color="#8b93a7", font=("Segoe UI", 10),
+        ).pack(anchor="w", padx=12, pady=(6, 2))
 
-        # Import / export
-        row = ctk.CTkFrame(top, fg_color="transparent")
-        row.pack(pady=10)
-        ctk.CTkButton(row, text=t("export"), width=130,
-                      command=self._on_export,
-                      fg_color="#2d3446", hover_color="#39415a"
-                      ).pack(side="left", padx=4)
-        ctk.CTkButton(row, text=t("import"), width=130,
-                      command=self._on_import,
-                      fg_color="#2d3446", hover_color="#39415a"
-                      ).pack(side="left", padx=4)
+        row = ctk.CTkFrame(g3, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(4, 8))
+        ctk.CTkButton(row, text=t("export"), height=30, command=self._on_export,
+                      fg_color="#2d3446", hover_color="#39415a").pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(row, text=t("import"), height=30, command=self._on_import,
+                      fg_color="#2d3446", hover_color="#39415a").pack(side="left", fill="x", expand=True, padx=(4, 0))
 
-        ctk.CTkLabel(top, text=f"v{config.APP_VERSION}",
-                     text_color="#5c6478").pack(side="bottom", pady=8)
+        ctk.CTkLabel(top, text=f"v{config.APP_VERSION}", text_color="#5c6478").pack(side="bottom", pady=6)
 
     def _on_language(self, code: str) -> None:
         set_language(code)
@@ -529,13 +585,7 @@ class MainWindow(ctk.CTk):
         self._toast_msg("🌐 " + code.upper())
 
     def _apply_language(self) -> None:
-        """Re-translate every label in place.
-
-        Deliberately does NOT destroy/recreate widgets: rebuilding the
-        whole cockpit (~700 widgets) on every language switch made
-        customtkinter's internal registries retain dead widgets — a real
-        memory leak. Configuring existing widgets is instant and leak-free.
-        """
+        """Re-translate every label in place without widget destruction."""
         self._tagline.configure(text=t("app_tagline"))
         self._menu_btn.configure(text=t("menu"))
         self._fullscreen_btn.configure(
@@ -557,6 +607,13 @@ class MainWindow(ctk.CTk):
         self._batt_title.configure(text=t("battery_min"))
         self._action_lbl.configure(text=t("action_label"))
         self._dry_var.set(("🧪 " + t("dry_run")) if self._dry_run else "")
+
+        # Update telemetry tile labels
+        for key in ("cpu", "ram", "temp", "batt"):
+            if key in self._tiles:
+                curr = self._tiles[key].cget("text")
+                val = curr.split(" ", 1)[1] if " " in curr else "—"
+                self._tiles[key].configure(text=f"{t(key)} {val}")
 
         # Mode radios: the radio VALUES are the translated labels.
         prev_mode_code = self._mode_values.get(
@@ -595,7 +652,8 @@ class MainWindow(ctk.CTk):
         self._set_armed_ui(self._engine.state.armed)
         if self._advice_payload:
             self._render_advice(self._advice_payload)
-        # The settings window holds stale-language widgets: close it.
+
+        # The settings window holds stale-language widgets: close it safely.
         if self._settings_win is not None and self._settings_win.winfo_exists():
             self._settings_win.destroy()
         self._settings_win = None
@@ -820,15 +878,23 @@ class MainWindow(ctk.CTk):
             self._timer_remaining = None  # no timer -> no corner badge
 
     # ------------------------------------------------------------------ #
-    # Event bus drain (GUI thread only)
+    # Event bus drain (GUI thread only, zero leaks)
     # ------------------------------------------------------------------ #
     def _drain_events(self) -> None:
+        if self._closing:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
         if self._overlay is not None and not self._overlay.winfo_exists():
             self._overlay = None
         self._update_badge()
         dropped = self._bus.dropped
         if dropped > self._last_dropped:
-            self._log(t("bus_drop", n=dropped))  # queue pressure is visible
+            self._log(t("bus_drop", n=dropped))
             self._last_dropped = dropped
         try:
             for ev in self._bus.drain(config.GUI_BATCH_MAX):
@@ -851,15 +917,17 @@ class MainWindow(ctk.CTk):
                     self._log(t("sensor_err", sensor=ev.payload.get("sensor"),
                                 error=ev.payload.get("error")))
         finally:
-            if self.winfo_exists():
-                self.after(config.GUI_POLL_MS, self._drain_events)
+            if not self._closing:
+                try:
+                    if self.winfo_exists():
+                        self._drain_after_id = self.after(
+                            config.GUI_POLL_MS, self._drain_events
+                        )
+                except Exception:
+                    pass
 
     def _render_advice(self, payload: dict) -> None:
-        """Show the hub verdict; clicking it applies the advised action.
-
-        The row only exists while there is something to show, keeping the
-        dashboard clean when the hub is idle.
-        """
+        """Show the hub verdict; clicking it applies the advised action."""
         self._advice_payload = payload
         action = payload.get("action", "stay")
         conf = int(payload.get("confidence", 0))
@@ -868,7 +936,6 @@ class MainWindow(ctk.CTk):
         if action == "stay":
             text = f"{t('advice_label')}: {reason}"
         else:
-            # Current-language label (never the hardcoded ES config map).
             label = next(
                 (lbl for lbl, code in self._action_values.items()
                  if code == action),
@@ -994,18 +1061,25 @@ class MainWindow(ctk.CTk):
         with contextlib.suppress(Exception):
             self._scroll._parent_canvas.yview_moveto(frac)
 
-
-
     def restore(self) -> None:
         self.after(0, lambda: (self.deiconify(), self.lift(),
                                self.focus_force()))
 
     def shutdown(self) -> None:
+        self._closing = True
+        if self._drain_after_id:
+            with contextlib.suppress(Exception):
+                self.after_cancel(self._drain_after_id)
+            self._drain_after_id = None
         self._engine.disarm(silent=True)
         if self._badge is not None and self._badge.winfo_exists():
             self._badge.destroy()
         self._badge = None
-        self.destroy()
+        if self._settings_win is not None and self._settings_win.winfo_exists():
+            self._settings_win.destroy()
+        self._settings_win = None
+        with contextlib.suppress(Exception):
+            self.destroy()
 
     # ------------------------------------------------------------------ #
     # Top-left countdown badge
@@ -1017,12 +1091,7 @@ class MainWindow(ctk.CTk):
         return self._badge
 
     def _update_badge(self) -> None:
-        """Drive the corner countdown from the current state.
-
-        Priority: pending emergency overlay > armed timer. Hidden in any
-        other case. Called from the GUI drain only (thread-safe by
-        construction).
-        """
+        """Drive the corner countdown from the current state."""
         if not self._badge_enabled:
             if self._badge is not None:
                 self._badge.hide()

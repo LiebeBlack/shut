@@ -90,7 +90,7 @@ class EmergencyOverlay(tk.Toplevel):
         except tk.TclError:
             self.focus_set()
         self._countdown_lbl.configure(text=str(self._remaining))
-        self.after(1000, self._tick)
+        self._tick_id = self.after(1000, self._tick)
 
     # ------------------------------------------------------------------ #
     def _tick(self) -> None:
@@ -104,7 +104,7 @@ class EmergencyOverlay(tk.Toplevel):
             text=str(self._remaining), fg="#ff5c5c" if self._remaining <= 5
             else "#ffd166"
         )
-        self.after(1000, self._tick)
+        self._tick_id = self.after(1000, self._tick)
 
     def _on_cancel(self) -> None:
         self._executor.cancel()
@@ -115,6 +115,12 @@ class EmergencyOverlay(tk.Toplevel):
         self._close()
 
     def _close(self) -> None:
+        if hasattr(self, "_tick_id") and self._tick_id:
+            with contextlib.suppress(Exception):
+                self.after_cancel(self._tick_id)
+            self._tick_id = None
         with contextlib.suppress(Exception):
             self.grab_release()
-        self.destroy()
+        with contextlib.suppress(Exception):
+            self.destroy()
+
