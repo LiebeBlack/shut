@@ -520,6 +520,11 @@ class MainWindow(ctk.CTk):
         self._log_box.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         self._log_box.configure(state="disabled")
 
+    def _clear_log(self) -> None:
+        self._log_box.configure(state="normal")
+        self._log_box.delete("1.0", "end")
+        self._log_box.configure(state="disabled")
+
     def _slider_row(self, parent, label, init, frm, to, steps, val, unit, tag):
         """Labeled slider row: title, live value, trough with mint fill."""
         title = ctk.CTkLabel(parent, text=label, font=theme.F_LABEL)
