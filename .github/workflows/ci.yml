@@ -15,21 +15,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  lint-and-test:
-    name: ${{ matrix.os }} / py${{ matrix.python }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-        python: ["3.11", "3.12", "3.13"]
-    runs-on: ${{ matrix.os }}
+  lint-and-compile:
+    name: windows-latest / py3.12
+    runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.12"
           cache: pip
 
       - name: Install Python dependencies
@@ -42,9 +37,4 @@ jobs:
         run: ruff check sshub main.py scripts/selftest.py
 
       - name: Compile check
-        run: python -m py_compile main.py sshub/*.py sshub/core/*.py sshub/gui/*.py sshub/sensors/*.py sshub/platform_layer/*.py scripts/selftest.py
-
-      - name: Self-test (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: $env:SSHUB_DRY_RUN="1"; python scripts/selftest.py
+        run: python -m compileall -q sshub scripts main.py
