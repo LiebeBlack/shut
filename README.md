@@ -295,16 +295,17 @@ precisión del temporizador. El resto de equipos usa el perfil estándar.
   `SSHUB_DRY_RUN=1` garantiza que jamás se toca el SO.
 - `fail-fast: false` y timeout de 20 min por job.
 
-`.github/workflows/build.yml` — en tag `v*` o `workflow_dispatch`:
+`.github/workflows/build.yml` — en push a `main`, tag `v*` o `workflow_dispatch`:
 
 1. Instala deps + PyInstaller; genera el icono (PIL, sin cairo).
 2. **Smoke test** del código antes de empaquetar.
-3. `pyinstaller sshub.spec --clean --noconfirm` → `dist/SmartShutdownHub.exe`.
+3. `pyinstaller sshub.spec --clean --noconfirm` → `dist/SmartShutdownHub.exe` (con metadatos de versión y manifiesto DPI PerMonitorV2).
 4. Inno Setup vía choco → `installer/SmartShutdownHub-Setup-<versión>.exe`
-   (la versión se toma del tag con `/DMyAppVersion`).
-5. Checksum SHA-256 + subida de artefactos + **release automático**
+   (instalador moderno con icono, accesos directos, App Paths y soporte bilingüe).
+5. Empaquetado de `SmartShutdownHub-Portable.zip` + `SHA256SUMS.txt`.
+6. Subida de artefactos a GitHub Actions + **publicación automática en GitHub Releases**
    (`softprops/action-gh-release`) con notas generadas.
-6. `concurrency` por ref y `timeout-minutes: 30`.
+7. `concurrency` por ref y `timeout-minutes: 30`.
 
 ## Instalación (desarrollo)
 
@@ -322,7 +323,9 @@ icono desde SVG.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
-# → dist\SmartShutdownHub.exe (onefile, sin consola)
+# → dist\SmartShutdownHub.exe (onefile, sin consola, con metadatos)
+# → dist\SmartShutdownHub-Portable.zip (versión portable)
+# → installer\SmartShutdownHub-Setup-1.0.0.exe (si ISCC está instalado)
 
 iscc scripts\installer.iss
 # → installer\SmartShutdownHub-Setup-1.0.0.exe
@@ -331,8 +334,9 @@ iscc scripts\installer.iss
 El instalador es por usuario, no requiere administrador y coloca la
 aplicación en `%LOCALAPPDATA%\Programs\SmartShutdownHub`.
 
-O empuja un tag `v*`: el workflow de GitHub Actions genera ambos
-artefactos y publica la release automáticamente.
+Al hacer `push` a la rama `main` o empujar un tag `v*`, el workflow de GitHub Actions
+genera todos los artefactos (instalador, portable zip, exe y checksums) y publica
+la release automáticamente en GitHub.
 
 ## Seguridad
 

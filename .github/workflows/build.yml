@@ -2,6 +2,7 @@ name: build-windows-exe
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -14,6 +15,7 @@ concurrency:
 
 jobs:
   build:
+    name: Package Windows EXE & Installer
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -28,53 +30,100 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pillow
 
-      - name: Generate multi-size icon (PIL fallback built-in, no cairo)
+      - name: Determine version
+        id: get_version
+        shell: pwsh
+        run: |
+          $ver = "1.0.0"
+          if ($env:GITHUB_REF_NAME -match '^v?(\d+\.\d+\.\d+.*)$') {
+            $ver = $Matches[1]
+          } elseif (Test-Path pyproject.toml) {
+            $content = Get-Content pyproject.toml -Raw
+            if ($content -match 'version\s*=\s*"([^"]+)"') {
+              $ver = $Matches[1]
+            }
+          }
+          Write-Host "Determined application version: $ver"
+          "version=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Generate multi-size icon (PIL fallback built-in)
         run: python -m sshub.gui.assets.make_ico
 
       - name: Smoke test (dry-run, never touches the OS)
         shell: pwsh
-        run: $env:SSHUB_DRY_RUN="1"; python scripts/selftest.py
+        run: |
+          $env:SSHUB_DRY_RUN="1"
+          python scripts/selftest.py
 
-      - name: Build onefile executable
+      - name: Build onefile executable with PyInstaller
         run: pyinstaller sshub.spec --clean --noconfirm
 
       - name: Install Inno Setup (choco)
         run: choco install innosetup --no-progress -y
 
-      - name: Build installer (version from tag when present)
+      - name: Build modern Windows installer
         shell: pwsh
         run: |
           $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $iscc) { Write-Error "ISCC.exe not found" }
-          $ver = $env:GITHUB_REF_NAME -replace '^v', ''
-          if ($ver -match '^\d+\.\d+\.\d+$') {
-            & $iscc.FullName scripts\installer.iss /DMyAppVersion=$ver
-          } else {
-            & $iscc.FullName scripts\installer.iss
+          if (-not $iscc) {
+            Write-Error "ISCC.exe not found"
+            exit 1
           }
+          $ver = "${{ steps.get_version.outputs.version }}"
+          Write-Host "Compiling Inno Setup installer with version: $ver"
+          & $iscc.FullName scripts\installer.iss /DMyAppVersion=$ver
 
-      - name: Checksums
+      - name: Package Portable ZIP & Compute SHA256 Checksums
         shell: pwsh
-        run: Get-FileHash dist\SmartShutdownHub.exe -Algorithm SHA256 | Out-File -Encoding ascii dist\SmartShutdownHub.exe.sha256
+        run: |
+          $ver = "${{ steps.get_version.outputs.version }}"
+          # Create Portable ZIP package
+          Compress-Archive -Path dist\SmartShutdownHub.exe, README.md -DestinationPath "dist\SmartShutdownHub-Portable.zip" -Force
+          
+          # Generate unified SHA256SUMS.txt
+          $installerFile = (Get-ChildItem -Path "installer\*.exe" | Select-Object -First 1).FullName
+          $files = @(
+            $installerFile,
+            (Resolve-Path "dist\SmartShutdownHub.exe").Path,
+            (Resolve-Path "dist\SmartShutdownHub-Portable.zip").Path
+          )
+          
+          $lines = foreach ($file in $files) {
+            if (Test-Path $file) {
+              $h = (Get-FileHash -Path $file -Algorithm SHA256).Hash.ToLowerInvariant()
+              $leaf = Split-Path $file -Leaf
+              "$h  $leaf"
+            }
+          }
+          $lines | Out-File -Encoding ascii -FilePath dist\SHA256SUMS.txt
+          Write-Host "Checksums generated:"
+          Get-Content dist\SHA256SUMS.txt
 
-      - name: Upload build artifacts
+      - name: Upload build artifacts (GitHub Actions)
         uses: actions/upload-artifact@v4
         with:
-          name: windows-build
+          name: SmartShutdownHub-Windows
           path: |
-            dist/SmartShutdownHub.exe
-            dist/SmartShutdownHub.exe.sha256
             installer/*.exe
-          if-no-files-found: warn
+            dist/SmartShutdownHub.exe
+            dist/SmartShutdownHub-Portable.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
 
-      - name: Publish release (tag pushes only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish / Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.get_version.outputs.version) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Smart Shutdown Hub {0}', github.ref_name) || format('Smart Shutdown Hub v{0}', steps.get_version.outputs.version) }}
+          draft: false
+          prerelease: false
           files: |
-            dist/SmartShutdownHub.exe
-            dist/SmartShutdownHub.exe.sha256
             installer/*.exe
+            dist/SmartShutdownHub.exe
+            dist/SmartShutdownHub-Portable.zip
+            dist/SHA256SUMS.txt
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

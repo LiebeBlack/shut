@@ -43,4 +43,7 @@ exe = EXE(
     upx=True,
     console=False,               # windowed app: no console flash
     icon=str(ROOT / "sshub" / "gui" / "assets" / "sshub.ico"),
+    version=str(ROOT / "scripts" / "version_info.txt") if (ROOT / "scripts" / "version_info.txt").exists() else None,
+    manifest=str(ROOT / "scripts" / "app.manifest") if (ROOT / "scripts" / "app.manifest").exists() else None,
 )
+
