@@ -57,8 +57,19 @@ jobs:
           $env:SSHUB_DRY_RUN="1"
           python scripts/selftest.py
 
-      - name: Build onefile executable with PyInstaller
+      - name: Build onedir folder with PyInstaller
         run: pyinstaller sshub.spec --clean --noconfirm
+
+      - name: Verify onedir folder contents
+        shell: pwsh
+        run: |
+          $exe = "dist/SmartShutdownHub/SmartShutdownHub.exe"
+          if (-not (Test-Path $exe)) { Write-Error "Missing $exe"; exit 1 }
+          if (-not (Test-Path "dist/SmartShutdownHub/_internal")) {
+            Write-Error "Missing _internal runtime folder"; exit 1 }
+          $n = (Get-ChildItem dist/SmartShutdownHub -Recurse -File).Count
+          Write-Host "onedir folder OK: $n files"
+          if ($n -lt 50) { Write-Error "onedir folder incomplete"; exit 1 }
 
       - name: Install Inno Setup (choco)
         run: choco install innosetup --no-progress -y
@@ -79,14 +90,13 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ steps.get_version.outputs.version }}"
-          # Create Portable ZIP package
-          Compress-Archive -Path dist\SmartShutdownHub.exe, README.md -DestinationPath "dist\SmartShutdownHub-Portable.zip" -Force
+          # Create Portable ZIP of the complete onedir folder
+          Compress-Archive -Path dist\SmartShutdownHub, README.md -DestinationPath "dist\SmartShutdownHub-Portable.zip" -Force
           
           # Generate unified SHA256SUMS.txt
           $installerFile = (Get-ChildItem -Path "installer\*.exe" | Select-Object -First 1).FullName
           $files = @(
             $installerFile,
-            (Resolve-Path "dist\SmartShutdownHub.exe").Path,
             (Resolve-Path "dist\SmartShutdownHub-Portable.zip").Path
           )
           
@@ -107,7 +117,6 @@ jobs:
           name: SmartShutdownHub-Windows
           path: |
             installer/*.exe
-            dist/SmartShutdownHub.exe
             dist/SmartShutdownHub-Portable.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
@@ -121,7 +130,6 @@ jobs:
           prerelease: false
           files: |
             installer/*.exe
-            dist/SmartShutdownHub.exe
             dist/SmartShutdownHub-Portable.zip
             dist/SHA256SUMS.txt
           generate_release_notes: true

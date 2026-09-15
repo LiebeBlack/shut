@@ -277,9 +277,9 @@ precisión del temporizador. El resto de equipos usa el perfil estándar.
 - **Afinado adaptativo**: sin SSE4.2 la cadencia del sensor Smart se
   relaja a 3 s para proteger CPUs antiguas; con SSE4.2 se mantiene la
   nominal (2 s).
-- **Build**: el onefile de PyInstaller desempaqueta payloads
-  comprimidos (zlib) — SSE4.2/PCLMULQDQ acelera esa descompresión en el
-  arranque del .exe.
+- **Build**: el empaquetado es **onedir** (carpeta completa en
+  `dist/SmartShutdownHub/`): sin auto-extracción a temp, arranque más
+  rápido y antivirus más tranquilos.
 - El resto de la carga es E/S dormida (hilos con `Event.wait`), no
   instrucciones de punto flotante calientes: el impacto real de SSE4.2
   aquí es arranque y el gate de cadencia, no cómputo por segundo.
@@ -299,10 +299,13 @@ precisión del temporizador. El resto de equipos usa el perfil estándar.
 
 1. Instala deps + PyInstaller; genera el icono (PIL, sin cairo).
 2. **Smoke test** del código antes de empaquetar.
-3. `pyinstaller sshub.spec --clean --noconfirm` → `dist/SmartShutdownHub.exe` (con metadatos de versión y manifiesto DPI PerMonitorV2).
+3. `pyinstaller sshub.spec --clean --noconfirm` → `dist/SmartShutdownHub/`
+   (carpeta completa onedir: exe con metadatos de versión y manifiesto DPI
+   PerMonitorV2 + `_internal` con libs, temas de customtkinter e icono).
 4. Inno Setup vía choco → `installer/SmartShutdownHub-Setup-<versión>.exe`
    (instalador moderno con icono, accesos directos, App Paths y soporte bilingüe).
-5. Empaquetado de `SmartShutdownHub-Portable.zip` + `SHA256SUMS.txt`.
+5. Empaquetado de la carpeta completa en `SmartShutdownHub-Portable.zip`
+   + `SHA256SUMS.txt`.
 6. Subida de artefactos a GitHub Actions + **publicación automática en GitHub Releases**
    (`softprops/action-gh-release`) con notas generadas.
 7. `concurrency` por ref y `timeout-minutes: 30`.
@@ -323,8 +326,8 @@ icono desde SVG.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
-# → dist\SmartShutdownHub.exe (onefile, sin consola, con metadatos)
-# → dist\SmartShutdownHub-Portable.zip (versión portable)
+# → dist\SmartShutdownHub\            (carpeta completa, sin consola)
+# → dist\SmartShutdownHub-Portable.zip (la carpeta completa en un zip)
 # → installer\SmartShutdownHub-Setup-1.0.0.exe (si ISCC está instalado)
 
 iscc scripts\installer.iss

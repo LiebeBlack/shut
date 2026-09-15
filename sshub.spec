@@ -1,5 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for Smart Shutdown Hub (Windows .exe, onefile)."""
+"""PyInstaller spec for Smart Shutdown Hub (Windows, onedir folder build).
+
+The result is a complete self-contained folder in dist/SmartShutdownHub/
+(imports, DLLs, customtkinter themes and the .ico live next to the exe),
+so the installer deploys the whole folder instead of a single file.
+"""
 import sys
 from pathlib import Path
 
@@ -33,10 +38,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,   # binaries go to the COLLECT folder, not the exe
     name="SmartShutdownHub",
     debug=False,
     strip=False,
@@ -45,5 +48,16 @@ exe = EXE(
     icon=str(ROOT / "sshub" / "gui" / "assets" / "sshub.ico"),
     version=str(ROOT / "scripts" / "version_info.txt") if (ROOT / "scripts" / "version_info.txt").exists() else None,
     manifest=str(ROOT / "scripts" / "app.manifest") if (ROOT / "scripts" / "app.manifest").exists() else None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="SmartShutdownHub",  # complete folder: dist/SmartShutdownHub/
 )
 

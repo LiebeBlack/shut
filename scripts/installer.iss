@@ -61,7 +61,10 @@ spanish.OptionsGroup=Opciones:
 english.OptionsGroup=Options:
 
 [Files]
-Source: "..\dist\SmartShutdownHub.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The complete application folder (onedir build: exe + _internal libs +
+; themes + icon), installed recursively so the app runs without repackaging.
+Source: "..\dist\SmartShutdownHub\*"; \
+    DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

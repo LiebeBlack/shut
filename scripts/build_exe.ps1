@@ -1,4 +1,4 @@
-# Build SmartShutdownHub.exe (onefile, windowed) and Inno Setup installer on Windows.
+# Build SmartShutdownHub (onedir folder, windowed) and Inno Setup installer on Windows.
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
 $ErrorActionPreference = "Stop"
 
@@ -19,16 +19,16 @@ Write-Host "Upgrading pip and installing dependencies..."
 Write-Host "Generating multi-resolution icon..."
 & $py -m sshub.gui.assets.make_ico
 
-# 3. PyInstaller
-Write-Host "Building standalone executable with PyInstaller..."
+# 3. PyInstaller (onedir: complete self-contained folder)
+Write-Host "Building standalone folder with PyInstaller..."
 & ".\.venv\Scripts\pyinstaller.exe" sshub.spec --clean --noconfirm
 
-if (Test-Path "dist\SmartShutdownHub.exe") {
-    Write-Host "Executable generated: dist\SmartShutdownHub.exe" -ForegroundColor Green
-    
-    # Create Portable ZIP
+if (Test-Path "dist\SmartShutdownHub\SmartShutdownHub.exe") {
+    Write-Host "Folder build generated: dist\SmartShutdownHub\" -ForegroundColor Green
+
+    # Create Portable ZIP of the complete folder
     Write-Host "Packaging Portable ZIP..."
-    Compress-Archive -Path "dist\SmartShutdownHub.exe", "README.md" -DestinationPath "dist\SmartShutdownHub-Portable.zip" -Force
+    Compress-Archive -Path "dist\SmartShutdownHub", "README.md" -DestinationPath "dist\SmartShutdownHub-Portable.zip" -Force
 }
 
 # 4. Inno Setup installer (if ISCC.exe is available)
