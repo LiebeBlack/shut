@@ -199,7 +199,8 @@ class MainWindow(ctk.CTk):
         self._logo.pack(side="left", padx=(0, 10))
         self._logo.pack_propagate(False)
         ctk.CTkLabel(
-            logo, text="⏻", font=theme.F_TITLE, text_color=theme.ACCENT_TEXT,
+            self._logo, text="⏻", font=theme.F_TITLE,
+            text_color=theme.ACCENT_TEXT,
         ).pack(expand=True)
 
         title_box = ctk.CTkFrame(header, fg_color="transparent")
