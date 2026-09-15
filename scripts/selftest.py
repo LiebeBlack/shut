@@ -526,7 +526,7 @@ def main() -> int:
     win._drain_events()
     win.update()
     check("badge survives language rebuild",
-          win._badge is None or not win._badge.winfo_exists())
+          win._badge is not None and win._badge.winfo_exists())
     win._toggle_badge()  # back off
     check("badge toggle off", settings3.get("countdown_overlay") is False)
     win._on_language("es")

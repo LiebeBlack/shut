@@ -38,3 +38,7 @@ jobs:
 
       - name: Compile check
         run: python -m compileall -q sshub scripts main.py
+
+      - name: Smoke test (dry-run)
+        shell: pwsh
+        run: $env:SSHUB_DRY_RUN="1"; python scripts/selftest.py
