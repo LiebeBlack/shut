@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import tkinter as tk
 
+from . import theme
+
 
 class Toast(tk.Toplevel):
     """Small non-modal notification; never steals focus."""
@@ -16,8 +18,11 @@ class Toast(tk.Toplevel):
         self.attributes("-topmost", True)
         with contextlib.suppress(tk.TclError):
             self.attributes("-alpha", 0.96)
+        card = tk.Frame(self, bg=theme.BG_CARD, highlightthickness=1,
+                        highlightbackground=theme.BORDER_ACTIVE)
+        card.pack()
         self._lbl = tk.Label(
-            self, text="", bg="#1b1f2a", fg="#e8eaf0",
+            card, text="", bg=theme.BG_CARD, fg=theme.TEXT_PRIMARY,
             font=("Segoe UI", 10), padx=16, pady=10,
         )
         self._lbl.pack()

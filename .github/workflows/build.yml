@@ -19,9 +19,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -102,7 +102,7 @@ jobs:
           Get-Content dist\SHA256SUMS.txt
 
       - name: Upload build artifacts (GitHub Actions)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: SmartShutdownHub-Windows
           path: |
@@ -113,7 +113,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish / Update GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.get_version.outputs.version) }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && format('Smart Shutdown Hub {0}', github.ref_name) || format('Smart Shutdown Hub v{0}', steps.get_version.outputs.version) }}

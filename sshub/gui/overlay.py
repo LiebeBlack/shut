@@ -1,8 +1,9 @@
-"""Emergency overlay v2: 30s countdown + giant CANCEL (Escape works).
+"""Emergency overlay v3: 30s countdown + depleting bar + giant CANCEL.
 
 Shown by the GUI thread when an EventType.OVERLAY arrives. If it reaches
 zero without cancellation, finalize() fires the real OS command (unless
-dry-run is active, in which case nothing is executed).
+dry-run is active, in which case nothing is executed). Redesigned look:
+dark card, red accent, mono countdown, linear depletion bar.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from .. import config
 from ..core.executor import ActionExecutor
 from ..events import EventBus
 from ..i18n import t
+from . import theme
 
 
 class EmergencyOverlay(tk.Toplevel):
@@ -26,61 +28,76 @@ class EmergencyOverlay(tk.Toplevel):
         self._bus = bus
         self._executor = executor
         self._remaining = seconds
+        self._total = max(1, seconds)
 
         self.title("Emergency Shutdown")
-        self.configure(bg="#1a1d26")
+        self.configure(bg=theme.BG_ROOT)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         with contextlib.suppress(tk.TclError):
-            self.attributes("-alpha", 0.94)
+            self.attributes("-alpha", 0.96)
 
-        w, h = 470, 270
+        w, h = 480, 300
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
 
-        container = tk.Frame(self, bg="#1a1d26", padx=24, pady=16)
-        container.pack(expand=True, fill="both")
+        card = tk.Frame(self, bg=theme.BG_CARD, highlightthickness=1,
+                        highlightbackground=theme.DANGER)
+        card.pack(expand=True, fill="both", padx=14, pady=14)
+
+        inner = tk.Frame(card, bg=theme.BG_CARD, padx=24, pady=16)
+        inner.pack(expand=True, fill="both")
 
         tk.Label(
-            container, text=t("emergency"), fg="#ff5c5c", bg="#1a1d26",
+            inner, text=t("emergency"), fg=theme.DANGER, bg=theme.BG_CARD,
             font=("Segoe UI", 16, "bold"),
         ).pack()
 
         tk.Label(
-            container, text=t(f"act_{action}") if action in config.ACTION_LABELS
+            inner, text=t(f"act_{action}") if action in config.ACTION_LABELS
             else action,
-            fg="#e8eaf0", bg="#1a1d26", font=("Segoe UI", 12),
+            fg=theme.TEXT_PRIMARY, bg=theme.BG_CARD,
+            font=("Segoe UI", 12),
         ).pack(pady=(4, 0))
 
         tk.Label(
-            container, text=t("fired_by", src=source), fg="#8b93a7",
-            bg="#1a1d26", font=("Segoe UI", 9),
+            inner, text=t("fired_by", src=source), fg=theme.TEXT_MUTED,
+            bg=theme.BG_CARD, font=("Segoe UI", 9),
         ).pack()
 
         if dry_run:  # safety banner in rehearsal mode
             tk.Label(
-                container, text="🧪 " + t("dry_run"), fg="#ffd166",
-                bg="#1a1d26", font=("Segoe UI", 9, "bold"),
+                inner, text="🧪 " + t("dry_run"), fg=theme.WARN,
+                bg=theme.BG_CARD, font=("Segoe UI", 9, "bold"),
             ).pack()
 
         self._countdown_lbl = tk.Label(
-            container, text=str(self._remaining), fg="#ffd166",
-            bg="#1a1d26", font=("Segoe UI", 42, "bold"),
+            inner, text=str(self._remaining), fg=theme.WARN,
+            bg=theme.BG_CARD, font=theme.F_COUNTDOWN,
         )
         self._countdown_lbl.pack(pady=4)
 
+        # Depleting bar: full at start, gone at zero — readable at a glance.
+        self._bar = tk.Canvas(inner, height=6, bg=theme.BG_CARD,
+                              highlightthickness=0)
+        self._bar.pack(fill="x", pady=(2, 6))
+        self._draw_bar()
+
         self._cancel_btn = tk.Button(
-            container, text=t("cancel"), command=self._on_cancel,
-            bg="#2ecc71", fg="#0b0d12", activebackground="#27ae60",
-            activeforeground="#0b0d12", font=("Segoe UI", 15, "bold"),
+            inner, text=t("cancel"), command=self._on_cancel,
+            bg=theme.ACCENT, fg=theme.ACCENT_TEXT,
+            activebackground=theme.ACCENT_HOVER,
+            activeforeground=theme.ACCENT_TEXT,
+            font=("Segoe UI", 15, "bold"),
             relief="flat", cursor="hand2", padx=30, pady=12,
+            borderwidth=0,
         )
         self._cancel_btn.pack(fill="x", ipady=4)
 
         tk.Label(
-            container, text=t("cancel_hint"), fg="#5c6478", bg="#1a1d26",
-            font=("Segoe UI", 8),
+            inner, text=t("cancel_hint"), fg=theme.TEXT_MUTED,
+            bg=theme.BG_CARD, font=("Segoe UI", 8),
         ).pack(pady=(6, 0))
 
         self.bind("<Escape>", lambda _e: self._on_cancel())
@@ -91,6 +108,16 @@ class EmergencyOverlay(tk.Toplevel):
             self.focus_set()
         self._countdown_lbl.configure(text=str(self._remaining))
         self._tick_id = self.after(1000, self._tick)
+        self.after(80, self._draw_bar)  # repaint once geometry is known
+
+    def _draw_bar(self) -> None:
+        """Render the depletion bar at the current remaining fraction."""
+        frac = max(0.0, min(1.0, self._remaining / self._total))
+        self._bar.delete("all")
+        w = int(self._bar.winfo_width() or 1)
+        color = theme.DANGER if frac <= 0.17 else theme.WARN
+        self._bar.create_rectangle(0, 0, max(2, int(w * frac)), 6,
+                                   fill=color, width=0)
 
     # ------------------------------------------------------------------ #
     def _tick(self) -> None:
@@ -101,9 +128,10 @@ class EmergencyOverlay(tk.Toplevel):
             self._finalize()
             return
         self._countdown_lbl.configure(
-            text=str(self._remaining), fg="#ff5c5c" if self._remaining <= 5
-            else "#ffd166"
+            text=str(self._remaining), fg=theme.DANGER if self._remaining <= 5
+            else theme.WARN
         )
+        self._draw_bar()
         self._tick_id = self.after(1000, self._tick)
 
     def _on_cancel(self) -> None:
@@ -123,4 +151,3 @@ class EmergencyOverlay(tk.Toplevel):
             self.grab_release()
         with contextlib.suppress(Exception):
             self.destroy()
-

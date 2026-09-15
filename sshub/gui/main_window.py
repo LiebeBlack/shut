@@ -1,5 +1,7 @@
-"""Main window v2: modern dark cockpit with distributed layout, live telemetry,
-toasts, structured accordions, bilingual support and leak-free event draining.
+"""Main window v3: redesigned cockpit — sticky command bar, live telemetry
+with progress bars, tricolor risk meter, restyled accordions, bilingual
+support and leak-free event draining. Rendering contract with
+scripts/selftest.py is preserved (attribute names, text formats).
 """
 
 from __future__ import annotations
@@ -17,24 +19,25 @@ from ..core.engine import MonitoringEngine
 from ..core.storage import Profile, ProfileStore
 from ..events import EventBus, EventType
 from ..i18n import detect_language, set_language, t
+from . import theme
 from .countdown_badge import CountdownBadge
 from .overlay import EmergencyOverlay
 from .toast import Toast
 
 
 class AccordionSection(ctk.CTkFrame):
-    """Collapsible section with modern header and smooth expand/collapse."""
+    """Collapsible section with a rounded card look and chevron header."""
 
     def __init__(self, master, title: str, expanded: bool = True) -> None:
-        super().__init__(master, fg_color="#181c26", corner_radius=12,
-                         border_width=1, border_color="#242938")
+        super().__init__(master, fg_color=theme.BG_CARD, corner_radius=14,
+                         border_width=1, border_color=theme.BORDER)
         self._expanded = expanded
         self._title = title
         self._header = ctk.CTkButton(
             self, text=f"{'▾' if expanded else '▸'}  {title}",
-            fg_color="transparent", hover_color="#222838",
-            text_color="#e8eaf0", font=("Segoe UI", 12, "bold"),
-            anchor="w", command=self.toggle, height=36,
+            fg_color="transparent", hover_color=theme.BG_HOVER,
+            text_color=theme.TEXT_PRIMARY, font=theme.F_SECTION,
+            anchor="w", command=self.toggle, height=38,
         )
         self._header.pack(fill="x", padx=6, pady=(4, 0))
         self._header.bind("<Return>", lambda _event: self.toggle())
@@ -45,13 +48,7 @@ class AccordionSection(ctk.CTkFrame):
 
     def toggle(self) -> None:
         self._expanded = not self._expanded
-        self._header.configure(
-            text=f"{'▾' if self._expanded else '▸'}  {self._title}"
-        )
-        if self._expanded:
-            self.body.pack(fill="x", padx=8, pady=(0, 8))
-        else:
-            self.body.pack_forget()
+        self.set_title(self._title)
 
     def set_title(self, title: str) -> None:
         """Update the section title without changing its expanded state."""
@@ -59,6 +56,10 @@ class AccordionSection(ctk.CTkFrame):
         self._header.configure(
             text=f"{'▾' if self._expanded else '▸'}  {self._title}"
         )
+        if self._expanded:
+            self.body.pack(fill="x", padx=8, pady=(0, 8))
+        else:
+            self.body.pack_forget()
 
 
 class MainWindow(ctk.CTk):
@@ -99,7 +100,7 @@ class MainWindow(ctk.CTk):
 
         self.title(f"{config.APP_NAME} — {config.APP_VERSION}")
         self._apply_geometry()
-        self.configure(fg_color="#12151c")
+        self.configure(fg_color=theme.BG_ROOT)
         self._set_window_icon()
         self._build_ui()
         self._reload_profiles()
@@ -177,45 +178,64 @@ class MainWindow(ctk.CTk):
         header = ctk.CTkFrame(self._scroll, fg_color="transparent")
         header.pack(fill="x", padx=12, pady=(10, 2))
 
+        logo = ctk.CTkFrame(header, fg_color=theme.ACCENT, corner_radius=9,
+                            width=36, height=36)
+        logo.pack(side="left", padx=(0, 10))
+        logo.pack_propagate(False)
         ctk.CTkLabel(
-            header, text="⏻ SMART SHUTDOWN HUB",
-            font=("Segoe UI", 18, "bold"), text_color="#00e5a0",
-        ).pack(side="left")
+            logo, text="⏻", font=theme.F_TITLE, text_color=theme.ACCENT_TEXT,
+        ).pack(expand=True)
 
-        self._status_dot = ctk.CTkLabel(
-            header, text=f"● {t('disarmed')}", font=("Segoe UI", 11, "bold"),
-            text_color="#5c6478",
-        )
-        self._status_dot.pack(side="right")
-
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side="left", fill="y")
+        ctk.CTkLabel(
+            title_box, text=config.APP_NAME.upper(), font=theme.F_HERO,
+            text_color=theme.TEXT_PRIMARY, anchor="w",
+        ).pack(anchor="w")
         self._tagline = ctk.CTkLabel(
-            self._scroll, text=t("app_tagline"), font=("Segoe UI", 10),
-            text_color="#7b849b",
+            title_box, text=t("app_tagline"), font=theme.F_META,
+            text_color=theme.TEXT_MUTED, anchor="w",
         )
-        self._tagline.pack(anchor="w", padx=14, pady=(0, 6))
+        self._tagline.pack(anchor="w")
+
+        # Status pill: gray DISARMED / mint ARMED / amber countdown MM:SS
+        self._status_pill = ctk.CTkFrame(
+            header, fg_color=theme.BG_ELEVATED, corner_radius=12,
+            border_width=1, border_color=theme.BORDER,
+        )
+        self._status_pill.pack(side="right")
+        self._status_dot = ctk.CTkLabel(
+            self._status_pill, text=f"● {t('disarmed')}",
+            font=theme.F_SMALL_BOLD, text_color=theme.TEXT_MUTED,
+        )
+        self._status_dot.pack(padx=12, pady=5)
 
         # -- Menu / Toolbar row ------------------------------------------ #
         menu_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        menu_row.pack(fill="x", padx=12, pady=(0, 6))
+        menu_row.pack(fill="x", padx=12, pady=(8, 4))
 
         self._menu_btn = ctk.CTkButton(
             menu_row, text=t("menu"), width=100, height=32,
-            fg_color="#1b1f2a", hover_color="#242b3b",
+            font=theme.F_SMALL, fg_color=theme.BG_ELEVATED,
+            hover_color=theme.BG_HOVER, corner_radius=8,
             command=self._open_menu,
         )
         self._menu_btn.pack(side="left")
 
         self._fullscreen_btn = ctk.CTkButton(
             menu_row, text=t("fullscreen"), width=130, height=32,
-            fg_color="#1b1f2a", hover_color="#242b3b",
+            font=theme.F_SMALL, fg_color=theme.BG_ELEVATED,
+            hover_color=theme.BG_HOVER, corner_radius=8,
             command=self._toggle_fullscreen,
         )
         self._fullscreen_btn.pack(side="left", padx=(6, 0))
 
         self._badge_btn = ctk.CTkButton(
-            menu_row, text="⏱  Badge", width=96, height=32,
-            fg_color="#2d3446" if self._badge_enabled else "#1b1f2a",
-            hover_color="#242b3b", command=self._toggle_badge,
+            menu_row, text="⏱  " + t("badge_short"), width=96, height=32,
+            font=theme.F_SMALL,
+            fg_color=theme.GHOST if self._badge_enabled else theme.BG_ELEVATED,
+            hover_color=theme.BG_HOVER, corner_radius=8,
+            command=self._toggle_badge,
         )
         self._badge_btn.pack(side="left", padx=(6, 0))
 
@@ -223,14 +243,14 @@ class MainWindow(ctk.CTk):
             value=("🧪 " + t("dry_run")) if self._dry_run else ""
         )
         ctk.CTkLabel(
-            menu_row, textvariable=self._dry_var, font=("Segoe UI", 10, "bold"),
-            text_color="#ffd166",
+            menu_row, textvariable=self._dry_var, font=theme.F_SMALL_BOLD,
+            text_color=theme.WARN,
         ).pack(side="left", padx=(10, 0))
 
         # -- Dashboard (Hero telemetry & AI Advice) ----------------------- #
         dash = ctk.CTkFrame(
-            self._scroll, fg_color="#10131b", corner_radius=14,
-            border_width=1, border_color="#202534",
+            self._scroll, fg_color=theme.BG_CARD, corner_radius=14,
+            border_width=1, border_color=theme.BORDER,
         )
         dash.pack(fill="x", padx=12, pady=6)
 
@@ -238,76 +258,88 @@ class MainWindow(ctk.CTk):
         score_row.pack(fill="x", padx=14, pady=(10, 4))
 
         self._dash_score = ctk.CTkLabel(
-            score_row, text="🧠 —", font=("Segoe UI", 22, "bold"),
-            text_color="#5c6478",
+            score_row, text="🧠 —", font=theme.F_HERO,
+            text_color=theme.TEXT_MUTED,
         )
-        self._dash_score.pack(side="left", padx=(0, 10))
+        self._dash_score.pack(side="left", padx=(0, 12))
 
         self._dash_why = ctk.CTkLabel(
-            score_row, text="", font=("Segoe UI", 10), text_color="#7b849b",
+            score_row, text="", font=theme.F_SMALL,
+            text_color=theme.TEXT_SECONDARY,
             justify="left", anchor="w", wraplength=440,
         )
         self._dash_why.pack(side="left", fill="x", expand=True)
 
+        # AI advice line (clickable), packed dynamically when available
         self._dash_advice = ctk.CTkLabel(
-            dash, text="", font=("Segoe UI", 10, "bold"), text_color="#7f9cf5",
+            dash, text="", font=theme.F_SMALL_BOLD, text_color=theme.INFO,
             justify="left", anchor="w", cursor="hand2", wraplength=540,
         )
-        # Packed dynamically when advice is available
         self._dash_advice.bind("<Button-1>", lambda _e: self._on_advice_click())
 
         tiles = ctk.CTkFrame(dash, fg_color="transparent")
         self._tiles_frame = tiles
-        tiles.pack(fill="x", padx=12, pady=(4, 10))
+        tiles.pack(fill="x", padx=12, pady=(4, 12))
 
         self._tiles: dict[str, ctk.CTkLabel] = {}
+        self._tile_bars: dict[str, ctk.CTkProgressBar] = {}
         for key in ("cpu", "ram", "temp", "batt"):
             tile_card = ctk.CTkFrame(
-                tiles, fg_color="#171b26", corner_radius=8,
-                border_width=1, border_color="#242a38",
+                tiles, fg_color=theme.BG_CARD_INNER, corner_radius=10,
+                border_width=1, border_color=theme.BORDER,
             )
             tile_card.pack(side="left", fill="x", expand=True, padx=4)
+            tile_box = ctk.CTkFrame(tile_card, fg_color="transparent")
+            tile_box.pack(fill="both", expand=True, padx=8, pady=7)
             lbl = ctk.CTkLabel(
-                tile_card, text=f"{t(key)} —", font=("Consolas", 11, "bold"),
-                text_color="#8b93a7", pady=4,
+                tile_box, text=f"{t(key)} —", font=theme.F_VALUE,
+                text_color=theme.TEXT_SECONDARY, anchor="w",
             )
-            lbl.pack(fill="both", expand=True)
+            lbl.pack(fill="x")
+            bar = ctk.CTkProgressBar(
+                tile_box, height=4, corner_radius=2,
+                fg_color=theme.BG_CONTROL, progress_color=theme.ACCENT,
+            )
+            bar.set(0)
+            bar.pack(fill="x", pady=(5, 0))
             self._tiles[key] = lbl
+            self._tile_bars[key] = bar
 
         # -- Profile selector ------------------------------------------- #
         sel = ctk.CTkFrame(
-            self._scroll, fg_color="#181c26", corner_radius=12,
-            border_width=1, border_color="#242938",
+            self._scroll, fg_color=theme.BG_CARD, corner_radius=14,
+            border_width=1, border_color=theme.BORDER,
         )
         sel.pack(fill="x", padx=12, pady=6)
 
         sel_row = ctk.CTkFrame(sel, fg_color="transparent")
-        sel_row.pack(fill="x", padx=12, pady=8)
+        sel_row.pack(fill="x", padx=12, pady=10)
 
         self._profile_lbl = ctk.CTkLabel(
-            sel_row, text=t("profile"), font=("Segoe UI", 12, "bold")
+            sel_row, text=t("profile"), font=theme.F_SECTION,
         )
         self._profile_lbl.pack(side="left", padx=(0, 10))
 
         self._profile_var = ctk.StringVar()
         self._profile_menu = ctk.CTkOptionMenu(
             sel_row, variable=self._profile_var, command=self._on_profile_selected,
-            fg_color="#232936", button_color="#2d3446",
-            button_hover_color="#39415a", text_color="#e8eaf0",
-            height=32,
+            fg_color=theme.BG_CONTROL, button_color=theme.GHOST,
+            button_hover_color=theme.BG_HOVER, text_color=theme.TEXT_PRIMARY,
+            height=32, corner_radius=8,
         )
         self._profile_menu.pack(side="left", fill="x", expand=True)
 
         self._add_profile_btn = ctk.CTkButton(
             sel_row, text=t("new"), width=78, height=32, command=self._on_add_profile,
-            fg_color="#2d3446", hover_color="#39415a",
+            font=theme.F_SMALL, fg_color=theme.GHOST,
+            hover_color=theme.BG_HOVER, corner_radius=8,
         )
         self._add_profile_btn.pack(side="left", padx=(8, 4))
 
         self._delete_profile_btn = ctk.CTkButton(
             sel_row, text=t("delete"), width=78, height=32,
-            command=self._on_delete_profile,
-            fg_color="#2d3446", hover_color="#5a2d34",
+            font=theme.F_SMALL, command=self._on_delete_profile,
+            fg_color=theme.GHOST, hover_color=theme.BG_HOVER, corner_radius=8,
         )
         self._delete_profile_btn.pack(side="left")
 
@@ -340,14 +372,15 @@ class MainWindow(ctk.CTk):
             c = 0 if idx < 4 else 1
             radio = ctk.CTkRadioButton(
                 modes_grid, text=label, variable=self._mode_var, value=label,
-                fg_color="#00e5a0", hover_color="#00c08a",
+                font=theme.F_LABEL, fg_color=theme.ACCENT,
+                hover_color=theme.ACCENT_HOVER,
             )
             radio.grid(row=r, column=c, sticky="w", padx=8, pady=3)
             self._mode_radios.append(radio)
 
         inputs_box = ctk.CTkFrame(
-            body, fg_color="#12151e", corner_radius=10,
-            border_width=1, border_color="#202534",
+            body, fg_color=theme.BG_CARD_INNER, corner_radius=10,
+            border_width=1, border_color=theme.BORDER,
         )
         inputs_box.pack(fill="x", padx=8, pady=6)
         inputs_box.grid_columnconfigure((0, 2), weight=0)
@@ -355,20 +388,30 @@ class MainWindow(ctk.CTk):
 
         self._lbl_countdown = ctk.CTkLabel(inputs_box, text=t("countdown_min"))
         self._lbl_countdown.grid(row=0, column=0, sticky="w", padx=(12, 6), pady=6)
-        self._countdown_entry = ctk.CTkEntry(inputs_box, width=70, justify="center")
+        self._countdown_entry = ctk.CTkEntry(
+            inputs_box, width=70, justify="center", height=30,
+            fg_color=theme.BG_CONTROL, border_color=theme.BORDER,
+            corner_radius=8,
+        )
         self._countdown_entry.insert(0, "0")
         self._countdown_entry.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=6)
 
         self._lbl_at_time = ctk.CTkLabel(inputs_box, text=t("at_time"))
         self._lbl_at_time.grid(row=0, column=2, sticky="w", padx=(12, 6), pady=6)
         self._at_time_entry = ctk.CTkEntry(
-            inputs_box, width=70, justify="center", placeholder_text="22:30"
+            inputs_box, width=70, justify="center", placeholder_text="22:30",
+            height=30, fg_color=theme.BG_CONTROL, border_color=theme.BORDER,
+            corner_radius=8,
         )
         self._at_time_entry.grid(row=0, column=3, sticky="w", padx=(0, 12), pady=6)
 
         self._lbl_idle = ctk.CTkLabel(inputs_box, text=t("idle_min"))
         self._lbl_idle.grid(row=1, column=0, sticky="w", padx=(12, 6), pady=(0, 8))
-        self._idle_entry = ctk.CTkEntry(inputs_box, width=70, justify="center")
+        self._idle_entry = ctk.CTkEntry(
+            inputs_box, width=70, justify="center", height=30,
+            fg_color=theme.BG_CONTROL, border_color=theme.BORDER,
+            corner_radius=8,
+        )
         self._idle_entry.insert(0, "30")
         self._idle_entry.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
@@ -407,44 +450,48 @@ class MainWindow(ctk.CTk):
         self._proc_var = ctk.StringVar(value=t("none_proc"))
         self._proc_menu = ctk.CTkOptionMenu(
             prow, variable=self._proc_var, width=280, height=32,
-            fg_color="#232936", button_color="#2d3446",
-            button_hover_color="#39415a",
+            fg_color=theme.BG_CONTROL, button_color=theme.GHOST,
+            button_hover_color=theme.BG_HOVER, corner_radius=8,
         )
         self._proc_menu.pack(side="left", fill="x", expand=True)
         self._refresh_proc_btn = ctk.CTkButton(
             prow, text="⟳", width=42, height=32, command=self._refresh_processes,
-            fg_color="#2d3446", hover_color="#39415a",
+            font=theme.F_LABEL_BOLD, fg_color=theme.GHOST,
+            hover_color=theme.BG_HOVER, corner_radius=8,
         )
         self._refresh_proc_btn.pack(side="left", padx=(8, 0))
 
         # -- Action & Arm Section ---------------------------------------- #
         act = ctk.CTkFrame(
-            self._scroll, fg_color="#181c26", corner_radius=12,
-            border_width=1, border_color="#242938",
+            self._scroll, fg_color=theme.BG_CARD, corner_radius=14,
+            border_width=1, border_color=theme.BORDER,
         )
         act.pack(fill="x", padx=12, pady=6)
 
         self._action_lbl = ctk.CTkLabel(
-            act, text=t("action_label"), font=("Segoe UI", 12, "bold")
+            act, text=t("action_label"), font=theme.F_SECTION,
         )
-        self._action_lbl.pack(anchor="w", padx=12, pady=(8, 4))
+        self._action_lbl.pack(anchor="w", padx=12, pady=(10, 4))
         self._action_values = {t(f"act_{k}"): k for k in config.ACTION_LABELS}
         self._action_var = ctk.StringVar()
         seg = ctk.CTkSegmentedButton(
             act, values=list(self._action_values),
             variable=self._action_var,
-            selected_color="#00e5a0", selected_hover_color="#00c08a",
-            fg_color="#232936", unselected_color="#232936",
-            text_color="#e8eaf0", height=34,
+            selected_color=theme.ACCENT, selected_hover_color=theme.ACCENT_HOVER,
+            fg_color=theme.BG_CONTROL, unselected_color=theme.BG_CONTROL,
+            text_color=theme.TEXT_PRIMARY, height=34, corner_radius=8,
         )
         self._action_seg = seg
         seg.set(next(iter(self._action_values)))
-        seg.pack(fill="x", padx=12, pady=(0, 10))
+        seg.pack(fill="x", padx=12, pady=(0, 12))
 
+        # The one loud element: the ARM command, pinned at the bottom of
+        # the scroll so it is always reachable without hunting.
         self._arm_btn = ctk.CTkButton(
-            self._scroll, text=t("arm"), height=48,
-            font=("Segoe UI", 14, "bold"),
-            fg_color="#00e5a0", hover_color="#00c08a", text_color="#0b0d12",
+            self._scroll, text=t("arm"), height=50,
+            font=theme.F_TITLE,
+            fg_color=theme.ACCENT, hover_color=theme.ACCENT_HOVER,
+            text_color=theme.ACCENT_TEXT, corner_radius=12,
             command=self._on_arm,
         )
         self._arm_btn.pack(fill="x", padx=12, pady=(6, 8))
@@ -459,31 +506,33 @@ class MainWindow(ctk.CTk):
         log_bar = ctk.CTkFrame(self._acc_log.body, fg_color="transparent")
         log_bar.pack(fill="x", padx=6, pady=(0, 4))
         ctk.CTkButton(
-            log_bar, text="🗑 Limpiar", width=74, height=24,
-            font=("Segoe UI", 10), fg_color="#232936", hover_color="#39415a",
+            log_bar, text="🗑 " + t("clear"), width=84, height=24,
+            font=theme.F_SMALL, fg_color=theme.BG_CONTROL,
+            hover_color=theme.BG_HOVER, corner_radius=6,
             command=self._clear_log,
         ).pack(side="right")
 
         self._log_box = ctk.CTkTextbox(
-            self._acc_log.body, height=130, fg_color="#0f1218",
-            text_color="#8b93a7", font=("Consolas", 10),
+            self._acc_log.body, height=130, fg_color=theme.BG_ROOT,
+            text_color=theme.TEXT_SECONDARY, font=theme.F_VALUE,
+            border_width=1, border_color=theme.BORDER, corner_radius=10,
         )
         self._log_box.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         self._log_box.configure(state="disabled")
 
-    def _clear_log(self) -> None:
-        self._log_box.configure(state="normal")
-        self._log_box.delete("1.0", "end")
-        self._log_box.configure(state="disabled")
-
     def _slider_row(self, parent, label, init, frm, to, steps, val, unit, tag):
-        title = ctk.CTkLabel(parent, text=label, font=("Segoe UI", 11))
+        """Labeled slider row: title, live value, trough with mint fill."""
+        title = ctk.CTkLabel(parent, text=label, font=theme.F_LABEL)
         title.pack(anchor="w", padx=12, pady=(4, 0))
         setattr(self, f"{tag}_title", title)
-        lbl = ctk.CTkLabel(parent, text=init, text_color="#00e5a0", font=("Segoe UI", 11, "bold"))
+        lbl = ctk.CTkLabel(
+            parent, text=init, font=theme.F_VALUE, text_color=theme.ACCENT,
+        )
         lbl.pack(anchor="w", padx=12)
         slider = ctk.CTkSlider(
             parent, from_=frm, to=to, number_of_steps=steps,
+            button_color=theme.ACCENT, button_hover_color=theme.ACCENT_HOVER,
+            progress_color=theme.ACCENT, fg_color=theme.BG_CONTROL,
             command=lambda v: lbl.configure(text=f"{int(float(v))}{unit}"),
         )
         slider.set(val)
@@ -504,18 +553,20 @@ class MainWindow(ctk.CTk):
         top.title(t("settings"))
         top.geometry("420x520")
         top.minsize(380, 460)
-        top.configure(fg_color="#14171f")
+        top.configure(fg_color=theme.BG_ROOT)
         top.transient(self)
         top.grab_set()
 
         ctk.CTkLabel(top, text=t("settings"),
-                     font=("Segoe UI", 15, "bold")).pack(pady=(12, 6))
+                     font=theme.F_TITLE).pack(pady=(12, 6))
 
         # Group 1: General & Idioma
-        g1 = ctk.CTkFrame(top, fg_color="#181c26", corner_radius=10,
-                          border_width=1, border_color="#242938")
+        g1 = ctk.CTkFrame(top, fg_color=theme.BG_CARD, corner_radius=12,
+                          border_width=1, border_color=theme.BORDER)
         g1.pack(fill="x", padx=14, pady=4)
-        ctk.CTkLabel(g1, text=t("language"), font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        ctk.CTkLabel(
+            g1, text=t("language"), font=theme.F_SECTION,
+        ).pack(anchor="w", padx=12, pady=(8, 2))
         langs = {"Español": "es", "English": "en"}
         lang_var = ctk.StringVar(
             value=next((k for k, v in langs.items()
@@ -525,58 +576,68 @@ class MainWindow(ctk.CTk):
         seg = ctk.CTkSegmentedButton(
             g1, values=list(langs), variable=lang_var,
             command=lambda v: self._on_language(langs[v]),
-            fg_color="#232936", selected_color="#00e5a0",
+            fg_color=theme.BG_CONTROL, selected_color=theme.ACCENT,
         )
         seg.pack(fill="x", padx=12, pady=4)
 
-        self._min_var = ctk.BooleanVar(value=bool(self._settings.get("start_minimized")))
+        self._min_var = ctk.BooleanVar(
+            value=bool(self._settings.get("start_minimized")))
         ctk.CTkSwitch(
             g1, text=t("start_minimized"), variable=self._min_var,
             command=self._on_toggle_minimized,
         ).pack(anchor="w", padx=12, pady=(6, 8))
 
         # Group 2: Modos de Asistencia
-        g2 = ctk.CTkFrame(top, fg_color="#181c26", corner_radius=10,
-                          border_width=1, border_color="#242938")
+        g2 = ctk.CTkFrame(top, fg_color=theme.BG_CARD, corner_radius=12,
+                          border_width=1, border_color=theme.BORDER)
         g2.pack(fill="x", padx=14, pady=4)
 
         self._dry_switch_var = ctk.BooleanVar(value=self._dry_run)
         ctk.CTkSwitch(
             g2, text=t("dry_run"), variable=self._dry_switch_var,
-            command=self._on_toggle_dry, progress_color="#ffd166",
+            command=self._on_toggle_dry, progress_color=theme.WARN,
         ).pack(anchor="w", padx=12, pady=(8, 4))
 
         self._hub_var = ctk.BooleanVar(value=bool(self._hub and self._hub.enabled))
         ctk.CTkSwitch(
             g2, text=t("hub"), variable=self._hub_var,
-            command=self._on_toggle_hub, progress_color="#7f9cf5",
+            command=self._on_toggle_hub, progress_color=theme.INFO,
         ).pack(anchor="w", padx=12, pady=4)
 
         self._badge_var = ctk.BooleanVar(value=self._badge_enabled)
         ctk.CTkSwitch(
             g2, text=t("countdown_badge"), variable=self._badge_var,
-            command=self._on_toggle_badge_switch, progress_color="#ffd166",
+            command=self._on_toggle_badge_switch, progress_color=theme.WARN,
         ).pack(anchor="w", padx=12, pady=(4, 8))
 
         # Group 3: Datos e Integración
-        g3 = ctk.CTkFrame(top, fg_color="#181c26", corner_radius=10,
-                          border_width=1, border_color="#242938")
+        g3 = ctk.CTkFrame(top, fg_color=theme.BG_CARD, corner_radius=12,
+                          border_width=1, border_color=theme.BORDER)
         g3.pack(fill="x", padx=14, pady=4)
 
         from ..platform_layer import cpu_sse4_2
         ctk.CTkLabel(
             g3, text=t("sse_report", ok="✓" if cpu_sse4_2() else "✗"),
-            text_color="#8b93a7", font=("Segoe UI", 10),
+            font=theme.F_SMALL, text_color=theme.TEXT_SECONDARY,
         ).pack(anchor="w", padx=12, pady=(6, 2))
 
         row = ctk.CTkFrame(g3, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=(4, 8))
-        ctk.CTkButton(row, text=t("export"), height=30, command=self._on_export,
-                      fg_color="#2d3446", hover_color="#39415a").pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ctk.CTkButton(row, text=t("import"), height=30, command=self._on_import,
-                      fg_color="#2d3446", hover_color="#39415a").pack(side="left", fill="x", expand=True, padx=(4, 0))
+        ctk.CTkButton(
+            row, text=t("export"), height=30, command=self._on_export,
+            font=theme.F_SMALL, fg_color=theme.GHOST,
+            hover_color=theme.BG_HOVER, corner_radius=8,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(
+            row, text=t("import"), height=30, command=self._on_import,
+            font=theme.F_SMALL, fg_color=theme.GHOST,
+            hover_color=theme.BG_HOVER, corner_radius=8,
+        ).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
-        ctk.CTkLabel(top, text=f"v{config.APP_VERSION}", text_color="#5c6478").pack(side="bottom", pady=6)
+        ctk.CTkLabel(
+            top, text=f"v{config.APP_VERSION}",
+            font=theme.F_META, text_color=theme.TEXT_MUTED,
+        ).pack(side="bottom", pady=6)
 
     def _on_language(self, code: str) -> None:
         set_language(code)
@@ -591,6 +652,7 @@ class MainWindow(ctk.CTk):
         self._fullscreen_btn.configure(
             text=t("exit_fullscreen") if self._fullscreen else t("fullscreen")
         )
+        self._badge_btn.configure(text="⏱  " + t("badge_short"))
         self._add_profile_btn.configure(text=t("new"))
         self._delete_profile_btn.configure(text=t("delete"))
         self._profile_lbl.configure(text=t("profile"))
@@ -678,7 +740,8 @@ class MainWindow(ctk.CTk):
         self._settings.set("countdown_overlay", self._badge_enabled)
         if hasattr(self, "_badge_btn"):
             self._badge_btn.configure(
-                fg_color="#2d3446" if self._badge_enabled else "#1b1f2a"
+                fg_color=theme.GHOST if self._badge_enabled
+                else theme.BG_ELEVATED
             )
         if not self._badge_enabled and self._badge is not None:
             self._badge.hide()
@@ -691,7 +754,8 @@ class MainWindow(ctk.CTk):
         self._settings.set("countdown_overlay", self._badge_enabled)
         if hasattr(self, "_badge_btn"):
             self._badge_btn.configure(
-                fg_color="#2d3446" if self._badge_enabled else "#1b1f2a"
+                fg_color=theme.GHOST if self._badge_enabled
+                else theme.BG_ELEVATED
             )
         if not self._badge_enabled and self._badge is not None:
             self._badge.hide()
@@ -864,17 +928,26 @@ class MainWindow(ctk.CTk):
 
     def _set_armed_ui(self, armed: bool) -> None:
         if armed:
-            self._arm_btn.configure(text=t("disarm"), fg_color="#ff5c5c",
-                                    hover_color="#e04848",
-                                    text_color="#ffffff")
-            self._status_dot.configure(text=f"● {t('armed')}",
-                                       text_color="#00e5a0")
+            self._arm_btn.configure(
+                text=t("disarm"), fg_color=theme.DANGER,
+                hover_color=theme.DANGER_HOVER,
+                text_color=theme.ON_DANGER,
+            )
+            self._status_dot.configure(
+                text=f"● {t('armed')}", text_color=theme.ACCENT)
+            self._status_pill.configure(
+                fg_color=theme.ARMED_PILL_BG,
+                border_color=theme.ARMED_PILL_BORDER)
         else:
-            self._arm_btn.configure(text=t("arm"), fg_color="#00e5a0",
-                                    hover_color="#00c08a",
-                                    text_color="#0b0d12")
-            self._status_dot.configure(text=f"● {t('disarmed')}",
-                                       text_color="#5c6478")
+            self._arm_btn.configure(
+                text=t("arm"), fg_color=theme.ACCENT,
+                hover_color=theme.ACCENT_HOVER,
+                text_color=theme.ACCENT_TEXT,
+            )
+            self._status_dot.configure(
+                text=f"● {t('disarmed')}", text_color=theme.TEXT_MUTED)
+            self._status_pill.configure(
+                fg_color=theme.BG_ELEVATED, border_color=theme.BORDER)
             self._timer_remaining = None  # no timer -> no corner badge
 
     # ------------------------------------------------------------------ #
@@ -981,33 +1054,63 @@ class MainWindow(ctk.CTk):
         if src == "absolute" and "remaining_s" in payload:
             self._timer_remaining = float(payload["remaining_s"])
             m, s = divmod(int(payload["remaining_s"]), 60)
-            self._status_dot.configure(text=f"● {m:02d}:{s:02d}",
-                                       text_color="#ffd166")
+            self._status_dot.configure(
+                text=f"● {m:02d}:{s:02d}", text_color=theme.WARN)
         if src == "smart" and "score" in payload:
             score = int(payload["score"])
-            color = ("#00e5a0" if score < 40 else
-                     "#ffd166" if score < 70 else "#ff5c5c")
+            color = theme.score_color(score)
             self._dash_score.configure(text=f"🧠 {score}%", text_color=color)
             self._dash_why.configure(text=" · ".join(payload.get("why", [])))
         if src in ("smart", "thermal_battery"):
             self._update_tiles(payload)
 
     def _update_tiles(self, payload: dict) -> None:
+        """Telemetry tiles: value text + tricolor progress bar fill."""
         cpu = payload.get("cpu_pct")
         if cpu is not None:
-            self._tiles["cpu"].configure(text=f"{t('cpu')} {int(cpu)}%")
+            self._tiles["cpu"].configure(
+                text=f"{t('cpu')} {int(cpu)}%",
+                text_color=theme.live_color(cpu),
+            )
+            self._tile_bars["cpu"].configure(
+                progress_color=theme.live_color(cpu))
+            self._tile_bars["cpu"].set(max(0.0, min(1.0, cpu / 100.0)))
         ram = payload.get("ram_pct")
         if ram is not None:
-            self._tiles["ram"].configure(text=f"{t('ram')} {int(ram)}%")
+            self._tiles["ram"].configure(
+                text=f"{t('ram')} {int(ram)}%",
+                text_color=theme.live_color(ram),
+            )
+            self._tile_bars["ram"].configure(
+                progress_color=theme.live_color(ram))
+            self._tile_bars["ram"].set(max(0.0, min(1.0, ram / 100.0)))
         temp = payload.get("temp_c")
         if temp is not None:
-            self._tiles["temp"].configure(text=f"{t('temp')} {int(temp)}°")
+            self._tiles["temp"].configure(
+                text=f"{t('temp')} {int(temp)}°",
+                text_color=theme.live_color(temp, max_pct=105),
+            )
+            self._tile_bars["temp"].configure(
+                progress_color=theme.live_color(temp, max_pct=105))
+            self._tile_bars["temp"].set(max(0.0, min(1.0, temp / 105.0)))
         batt = payload.get("battery_pct")
         if batt is not None:
             plug = payload.get("plugged")
-            icon = "⚡" if plug else "🔋"
-            suffix = t("no_battery") if plug else f"{int(batt)}%"
-            self._tiles["batt"].configure(text=f"{icon} {suffix}")
+            if plug:
+                # On AC power: battery risk is zero by definition.
+                icon = "⚡"
+                suffix = t("no_battery")
+                color = theme.ACCENT
+                frac = 0.0
+            else:
+                icon = "🔋"
+                suffix = f"{int(batt)}%"
+                color = theme.live_color(100 - batt)
+                frac = max(0.0, min(1.0, batt / 100.0))
+            self._tiles["batt"].configure(
+                text=f"{icon} {suffix}", text_color=color)
+            self._tile_bars["batt"].configure(progress_color=color)
+            self._tile_bars["batt"].set(frac)
 
     def _log(self, msg: str) -> None:
         self._log_box.configure(state="normal")

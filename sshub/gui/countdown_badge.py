@@ -14,6 +14,8 @@ from __future__ import annotations
 import contextlib
 import tkinter as tk
 
+from . import theme
+
 
 class CountdownBadge(tk.Toplevel):
     """Borderless floating timer, top-left corner of the primary screen."""
@@ -27,10 +29,11 @@ class CountdownBadge(tk.Toplevel):
             self.attributes("-alpha", 0.92)
         with contextlib.suppress(tk.TclError):  # Windows: no taskbar entry
             self.attributes("-toolwindow", True)
-        self.configure(bg="#14171f")
-
+        card = tk.Frame(self, bg=theme.BG_CARD, highlightthickness=1,
+                        highlightbackground=theme.BORDER_ACTIVE)
+        card.pack()
         self._lbl = tk.Label(
-            self, text="", bg="#14171f", fg="#ffd166",
+            card, text="", bg=theme.BG_CARD, fg=theme.WARN,
             font=("Consolas", 13, "bold"), padx=10, pady=4,
         )
         self._lbl.pack()
@@ -55,11 +58,21 @@ class CountdownBadge(tk.Toplevel):
             text = f"⏱ {h:02d}:{m:02d}:{s_:02d}"
         else:
             text = f"⏱ {m:02d}:{s_:02d}"
-        self._lbl.configure(text=text)
+        # Traffic-light urgency: calm mint when far away, amber, then red
+        # when the action is about to fire.
+        self._lbl.configure(text=text, fg=self._urgency_color(s))
         if not self._shown:
             self._place_top_left()
             self.deiconify()
             self._shown = True
+
+    @staticmethod
+    def _urgency_color(seconds: int) -> str:
+        if seconds > 300:
+            return theme.ACCENT
+        if seconds > 60:
+            return theme.WARN
+        return theme.DANGER
 
     def hide(self) -> None:
         if not self._shown:
