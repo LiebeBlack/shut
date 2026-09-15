@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import time
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -16,6 +17,15 @@ import customtkinter as ctk
 
 from .. import config
 from ..core.engine import MonitoringEngine
+from ..core.history import (
+    KIND_ARM,
+    KIND_CANCELLED,
+    KIND_DISARM,
+    KIND_ERROR,
+    KIND_EXECUTED,
+    KIND_TRIGGER,
+    ActivityLog,
+)
 from ..core.storage import Profile, ProfileStore
 from ..events import EventBus, EventType
 from ..i18n import detect_language, set_language, t
@@ -28,11 +38,13 @@ from .toast import Toast
 class AccordionSection(ctk.CTkFrame):
     """Collapsible section with a rounded card look and chevron header."""
 
-    def __init__(self, master, title: str, expanded: bool = True) -> None:
+    def __init__(self, master, title: str, expanded: bool = True,
+                 on_toggle=None) -> None:
         super().__init__(master, fg_color=theme.BG_CARD, corner_radius=14,
                          border_width=1, border_color=theme.BORDER)
         self._expanded = expanded
         self._title = title
+        self._on_toggle = on_toggle  # lazy refresh hook (None = static)
         self._header = ctk.CTkButton(
             self, text=f"{'▾' if expanded else '▸'}  {title}",
             fg_color="transparent", hover_color=theme.BG_HOVER,
@@ -49,6 +61,10 @@ class AccordionSection(ctk.CTkFrame):
     def toggle(self) -> None:
         self._expanded = not self._expanded
         self.set_title(self._title)
+        if self._expanded and self._on_toggle is not None:
+            # Lazy refresh: a collapsed section costs nothing while closed.
+            with contextlib.suppress(Exception):
+                self._on_toggle()
 
     def set_title(self, title: str) -> None:
         """Update the section title without changing its expanded state."""
@@ -67,13 +83,17 @@ class MainWindow(ctk.CTk):
 
     def __init__(self, bus: EventBus, store: ProfileStore,
                  engine: MonitoringEngine, settings,
-                 hub=None) -> None:
+                 hub=None, history=None) -> None:
         super().__init__()
         self._bus = bus
         self._store = store
         self._engine = engine
         self._settings = settings
         self._hub = hub  # IntelligenceHub | None (advisory only)
+        # Activity journal: file-backed in the app, in-memory by default so
+        # building the window never writes to the user's data directory.
+        self._history = history if history is not None else ActivityLog()
+        self._status_hook = None  # tray status sink, attached by app.py
         self._advice_payload: dict | None = None
         self._last_dropped = 0
         self._profiles: list[Profile] = []
@@ -91,6 +111,9 @@ class MainWindow(ctk.CTk):
         self._closing = False
         # -- ultra expansion state --------------------------------------- #
         self._armed = False
+        self._warn_60 = False        # one-shot T-60 escalation warning
+        self._session_start: float | None = None
+        self._session_triggers = 0
         self._arm_total_s = 0.0
         self._trend_prev: int | None = None
         self._trend_dir = 0
@@ -131,6 +154,7 @@ class MainWindow(ctk.CTk):
         self.bind("<Home>", lambda _e: self._scroll_to(0.0))
         self.bind("<End>", lambda _e: self._scroll_to(1.0))
         # Power-user hotkeys: F9 arm/disarm, F10 badge, F1 settings.
+        self.bind("<F8>", lambda _e: self._on_abort_os())
         self.bind("<F9>", lambda _e: self._on_arm())
         self.bind("<F10>", lambda _e: self._toggle_badge())
         self.bind("<F1>", lambda _e: self._open_menu())
@@ -405,6 +429,13 @@ class MainWindow(ctk.CTk):
         )
         self._delete_profile_btn.pack(side="left")
 
+        self._clone_profile_btn = ctk.CTkButton(
+            sel_row, text=t("clone"), width=78, height=32,
+            font=theme.F_SMALL, command=self._on_clone_profile,
+            fg_color=theme.GHOST, hover_color=theme.BG_HOVER, corner_radius=8,
+        )
+        self._clone_profile_btn.pack(side="left", padx=(4, 0))
+
         # -- Accordion: trigger conditions (distributed 2-column grid) -- #
         self._acc_triggers = AccordionSection(
             self._scroll, f"⚡ {t('sec_triggers')}"
@@ -473,7 +504,8 @@ class MainWindow(ctk.CTk):
             corner_radius=8,
         )
         self._countdown_entry.insert(0, "0")
-        self._countdown_entry.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=6)
+        self._countdown_entry.grid(row=0, column=1, sticky="w", padx=(0, 12),
+                                   pady=6)
 
         self._lbl_at_time = ctk.CTkLabel(inputs_box, text=t("at_time"))
         self._lbl_at_time.grid(row=0, column=2, sticky="w", padx=(12, 6), pady=6)
@@ -493,6 +525,20 @@ class MainWindow(ctk.CTk):
         )
         self._idle_entry.insert(0, "30")
         self._idle_entry.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+
+        # Read-only preview: when this profile would actually fire. It reuses
+        # the timer's own deadline math, so it can never disagree with the
+        # engine; edits re-evaluate it live.
+        self._next_lbl = ctk.CTkLabel(
+            inputs_box, text="", font=theme.F_SMALL_BOLD,
+            text_color=theme.TEXT_MUTED, anchor="w",
+        )
+        self._next_lbl.grid(row=1, column=2, columnspan=2, sticky="w",
+                            padx=(12, 8), pady=(0, 8))
+        self._countdown_entry.bind(
+            "<KeyRelease>", lambda _e: self._update_next_fire())
+        self._at_time_entry.bind(
+            "<KeyRelease>", lambda _e: self._update_next_fire())
 
         # -- Accordion: advanced (2-column balanced grid) ---------------- #
         self._acc_advanced = AccordionSection(
@@ -562,7 +608,18 @@ class MainWindow(ctk.CTk):
         )
         self._action_seg = seg
         seg.set(next(iter(self._action_values)))
-        seg.pack(fill="x", padx=12, pady=(0, 12))
+        seg.pack(fill="x", padx=12, pady=(0, 8))
+
+        # Escape hatch: reclaim an OS shutdown already issued with its 60 s
+        # grace timeout (a crash of this app leaves the same door open via
+        # `shutdown /a`). Harmless no-op when nothing is pending.
+        self._abort_btn = ctk.CTkButton(
+            act, text="⛔  " + t("abort_os"), height=30,
+            font=theme.F_SMALL, fg_color=theme.GHOST,
+            hover_color=theme.BG_HOVER, corner_radius=8,
+            command=self._on_abort_os,
+        )
+        self._abort_btn.pack(fill="x", padx=12, pady=(0, 12))
 
         # The one loud element: the ARM command, pinned at the bottom of
         # the scroll so it is always reachable without hunting.
@@ -599,10 +656,85 @@ class MainWindow(ctk.CTk):
         self._log_box.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         self._log_box.configure(state="disabled")
 
+        # -- Accordion: persistent activity journal ---------------------- #
+        self._acc_activity = AccordionSection(
+            self._scroll, f"🧾 {t('sec_activity')}", expanded=False,
+            on_toggle=self._render_activity,
+        )
+        self._acc_activity.pack(fill="x", padx=12, pady=(2, 10))
+        abody = self._acc_activity.body
+
+        stats_row = ctk.CTkFrame(abody, fg_color="transparent")
+        stats_row.pack(fill="x", padx=6, pady=(2, 2))
+        self._act_stats = ctk.CTkLabel(
+            stats_row, text="", font=theme.F_SMALL_BOLD,
+            text_color=theme.TEXT_SECONDARY, justify="left", anchor="w",
+            wraplength=460,
+        )
+        self._act_stats.pack(side="left", fill="x", expand=True)
+        self._act_refresh_btn = ctk.CTkButton(
+            stats_row, text="⟳ " + t("refresh"), width=94, height=24,
+            font=theme.F_SMALL, fg_color=theme.BG_CONTROL,
+            hover_color=theme.BG_HOVER, corner_radius=6,
+            command=self._render_activity,
+        )
+        self._act_refresh_btn.pack(side="left", padx=(4, 0))
+        self._act_clear_btn = ctk.CTkButton(
+            stats_row, text="🗑 " + t("clear"), width=80, height=24,
+            font=theme.F_SMALL, fg_color=theme.BG_CONTROL,
+            hover_color=theme.BG_HOVER, corner_radius=6,
+            command=self._clear_activity,
+        )
+        self._act_clear_btn.pack(side="left", padx=(4, 0))
+
+        self._act_box = ctk.CTkTextbox(
+            abody, height=140, fg_color=theme.BG_ROOT,
+            text_color=theme.TEXT_SECONDARY, font=theme.F_VALUE,
+            border_width=1, border_color=theme.BORDER, corner_radius=10,
+        )
+        self._act_box.pack(fill="both", expand=True, padx=4, pady=(2, 4))
+        self._act_box.configure(state="disabled")
+
     def _clear_log(self) -> None:
         self._log_box.configure(state="normal")
         self._log_box.delete("1.0", "end")
         self._log_box.configure(state="disabled")
+
+    def _update_next_fire(self) -> None:
+        """Preview when the visible profile would next fire (read-only).
+
+        Delegates the schedule math to AbsoluteTimerSensor so the label
+        and the engine can never disagree; bad input just shows nothing.
+        """
+        if not hasattr(self, "_next_lbl"):
+            return
+        from ..core.sensors import AbsoluteTimerSensor
+
+        mode = self._mode_values.get(self._mode_var.get(), "absolute")
+        if mode != "absolute":
+            self._next_lbl.configure(text=t("next_other"),
+                                     text_color=theme.TEXT_MUTED)
+            return
+        deadlines: list[float] = []
+        mins = self._to_int(self._countdown_entry.get(), 0)
+        if mins > 0:
+            deadlines.append(float(mins) * 60.0)
+        at = self._at_time_entry.get().strip()
+        if at:
+            with contextlib.suppress(ValueError):
+                deadlines.append(max(
+                    0.0,
+                    AbsoluteTimerSensor._next_wallclock(at) - time.monotonic(),
+                ))
+        if not deadlines:
+            self._next_lbl.configure(text=t("next_none"),
+                                     text_color=theme.TEXT_MUTED)
+            return
+        secs = int(min(deadlines))
+        hours, rest = divmod(secs, 3600)
+        pretty = f"{hours}h{rest // 60:02d}" if hours else f"{rest // 60}m"
+        self._next_lbl.configure(text=t("next_fire", v=pretty),
+                                 text_color=theme.ACCENT)
 
     def _apply_preset(self, preset: int | str) -> None:
         """Fill the timer inputs from a quick-preset chip (min or HH:MM)."""
@@ -610,13 +742,138 @@ class MainWindow(ctk.CTk):
         self._at_time_entry.delete(0, "end")
         if isinstance(preset, str):
             if not self._valid_hhmm(preset):
+                self._update_next_fire()
                 return
             self._at_time_entry.insert(0, preset)
             self._toast_msg(t("preset_applied", v=preset))
+            self._update_next_fire()
             return
         self._countdown_entry.delete(0, "end")
         self._countdown_entry.insert(0, str(preset))
         self._toast_msg(t("preset_applied", v=f"{preset}m"))
+        self._update_next_fire()
+
+    # ------------------------------------------------------------------ #
+    # Activity journal + live status broadcasting
+    # ------------------------------------------------------------------ #
+    def _record(self, kind: str, **fields) -> None:
+        """Journal one activity row and refresh the card when it is open."""
+        if kind == KIND_TRIGGER:
+            self._session_triggers += 1
+        if self._history is None:
+            return
+        with contextlib.suppress(Exception):
+            self._history.record(kind, **fields)
+        acc = getattr(self, "_acc_activity", None)
+        if acc is not None and acc._expanded:
+            self._render_activity()
+
+    def _notify_status(self, status: str) -> None:
+        """Push a status line to whoever listens (the tray). Never raises."""
+        hook = self._status_hook
+        if hook is None:
+            return
+        with contextlib.suppress(Exception):
+            hook(self._armed, status)
+
+    def _maybe_warn_soon(self, remaining: float) -> None:
+        """One-shot T-60 escalation warning before the emergency overlay."""
+        if not self._armed or self._warn_60 or remaining > 60.0:
+            return
+        self._warn_60 = True
+        secs = max(0, int(remaining))
+        self._toast_msg(t("warn_soon", s=secs))
+        self._log(t("warn_soon_log", s=secs))
+
+    def _session_summary(self) -> str:
+        """Toast text closing an armed session (duration + trigger count)."""
+        if self._session_start is None:
+            return t("disarmed_toast")
+        mins = int(max(0.0, time.monotonic() - self._session_start) / 60)
+        n, self._session_triggers = self._session_triggers, 0
+        self._session_start = None
+        if n < config.SESSION_MIN_TRIGGERS:
+            return t("disarmed_toast")
+        return t("session_end", mins=mins, n=n)
+
+    def _render_activity(self) -> None:
+        """Fill the journal card from persistent history (never raises)."""
+        if self._history is None or not hasattr(self, "_act_box"):
+            return
+        if not self._acc_activity._expanded:
+            return  # collapsed: keep zero read/format work on the hot path
+        with contextlib.suppress(Exception):
+            counts = self._history.counts()
+            entries = self._history.recent(config.JOURNAL_PREVIEW_ROWS)
+            self._act_stats.configure(text=t(
+                "activity_stats",
+                armed=counts.get(KIND_ARM, 0),
+                fired=counts.get(KIND_EXECUTED, 0),
+                cancelled=counts.get(KIND_CANCELLED, 0),
+                errors=counts.get(KIND_ERROR, 0),
+                total=sum(counts.values()),
+            ))
+            lines = [ActivityLog.format_entry(e) for e in entries]
+            self._act_box.configure(state="normal")
+            self._act_box.delete("1.0", "end")
+            self._act_box.insert(
+                "1.0", "\n".join(lines) if lines else t("activity_empty"))
+            self._act_box.configure(state="disabled")
+
+    def _clear_activity(self) -> None:
+        if self._history is not None:
+            with contextlib.suppress(Exception):
+                self._history.clear()
+        self._render_activity()
+        self._toast_msg(t("activity_cleared"))
+
+    # ------------------------------------------------------------------ #
+    # Profile clone + login autostart
+    # ------------------------------------------------------------------ #
+    def _on_clone_profile(self) -> None:
+        """Duplicate the visible profile so variants are one click away."""
+        src = self._current
+        if src is None:
+            return
+        base = t("clone_name", name=src.name)
+        name, n = base, 2
+        while self._find_profile(name):
+            name = f"{base} ({n})"
+            n += 1
+        clone = Profile(
+            id=None, name=name, mode=src.mode,
+            countdown_minutes=src.countdown_minutes, at_time=src.at_time,
+            idle_minutes=src.idle_minutes, process_name=src.process_name,
+            network_max_kbps=src.network_max_kbps,
+            thermal_max_c=src.thermal_max_c, battery_min=src.battery_min,
+            action=src.action, enabled=src.enabled,
+        )
+        clone.id = self._store.add(clone)
+        self._reload_profiles()
+        self._profile_var.set(name)
+        self._on_profile_selected(name)
+        self._toast_msg(t("cloned", name=name))
+
+    def _on_abort_os(self) -> None:
+        """Abort a system shutdown that is still inside its grace window."""
+        from ..core.executor import abort_pending_os_shutdown
+
+        abort_pending_os_shutdown()
+        self._toast_msg(t("abort_os_ok"))
+        self._log(t("abort_os_ok"))
+
+    def _on_toggle_autostart(self) -> None:
+        """Mirror the login switch onto the per-user HKCU Run entry."""
+        from ..platform_layer import set_autostart
+
+        want = bool(self._auto_var.get())
+        if not set_autostart(want):
+            self._auto_var.set(not want)  # the OS refused: never lie in the UI
+            self._toast_msg(t("autostart_err"))
+            self._log(t("autostart_err"))
+            return
+        self._settings.set("autostart", want)
+        self._toast_msg(t("autostart_on") if want else t("autostart_off"))
 
     def _on_accent(self, name: str) -> None:
         """Live accent switch: re-skin every accent-bearing widget."""
@@ -693,7 +950,7 @@ class MainWindow(ctk.CTk):
         top = ctk.CTkToplevel(self)
         self._settings_win = top
         top.title(t("settings"))
-        top.geometry("420x560")
+        top.geometry("420x620")
         top.minsize(380, 500)
         top.configure(fg_color=theme.BG_ROOT)
         top.transient(self)
@@ -745,7 +1002,16 @@ class MainWindow(ctk.CTk):
         ctk.CTkSwitch(
             g1, text=t("start_minimized"), variable=self._min_var,
             command=self._on_toggle_minimized,
-        ).pack(anchor="w", padx=12, pady=(6, 8))
+        ).pack(anchor="w", padx=12, pady=(6, 4))
+
+        # Login autostart: mirrors the per-user HKCU Run entry.
+        from ..platform_layer import is_autostart
+
+        self._auto_var = ctk.BooleanVar(value=is_autostart())
+        ctk.CTkSwitch(
+            g1, text=t("autostart"), variable=self._auto_var,
+            command=self._on_toggle_autostart,
+        ).pack(anchor="w", padx=12, pady=(4, 8))
 
         # Group 2: Modos de Asistencia
         g2 = ctk.CTkFrame(top, fg_color=theme.BG_CARD, corner_radius=12,
@@ -815,11 +1081,18 @@ class MainWindow(ctk.CTk):
         self._badge_btn.configure(text="⏱  " + t("badge_short"))
         self._add_profile_btn.configure(text=t("new"))
         self._delete_profile_btn.configure(text=t("delete"))
+        self._clone_profile_btn.configure(text=t("clone"))
         self._profile_lbl.configure(text=t("profile"))
         self._acc_triggers.set_title(f"⚡ {t('sec_triggers')}")
         self._acc_advanced.set_title(f"🎛 {t('sec_advanced')}")
         self._acc_proc.set_title(f"🔎 {t('sec_process')}")
         self._acc_log.set_title(f"📡 {t('sec_telemetry')}")
+        self._acc_activity.set_title(f"🧾 {t('sec_activity')}")
+        self._act_clear_btn.configure(text="🗑 " + t("clear"))
+        self._act_refresh_btn.configure(text="⟳ " + t("refresh"))
+        self._abort_btn.configure(text="⛔  " + t("abort_os"))
+        self._render_activity()  # journal strings follow the language
+        self._update_next_fire()  # preview follows the new mode labels
         self._lbl_countdown.configure(text=t("countdown_min"))
         self._lbl_at_time.configure(text=t("at_time"))
         self._lbl_idle.configure(text=t("idle_min"))
@@ -998,6 +1271,7 @@ class MainWindow(ctk.CTk):
                    "sleep": "act_sleep", "hibernate": "act_hibernate"}.get(
                        p.action, "act_shutdown")
         self._action_seg.set(t(act_key))
+        self._update_next_fire()
 
     def _on_add_profile(self) -> None:
         win = ctk.CTkInputDialog(text=t("new_profile"), title=t("profile"))
@@ -1112,6 +1386,13 @@ class MainWindow(ctk.CTk):
             return False
 
     def _set_armed_ui(self, armed: bool) -> None:
+        """Reflect the engine state in the whole UI.
+
+        Idempotent by design: language rebuilds re-call this, so the
+        journal entry, the session bookkeeping and the toast only fire
+        on a real state transition.
+        """
+        changed = (bool(armed) != self._armed)
         self._armed = armed
         if armed:
             self._arm_btn.configure(
@@ -1130,7 +1411,16 @@ class MainWindow(ctk.CTk):
             if not self._live_banner.winfo_ismapped():
                 self._live_banner.pack(fill="x", padx=12, pady=6,
                                        before=self._sel_frame)
-            self._toast_msg(t("armed_toast"))
+            if changed:
+                self._warn_60 = False
+                self._session_start = time.monotonic()
+                self._session_triggers = 0
+                active = self._engine.state.profile
+                self._record(KIND_ARM, profile=pname, action=(
+                    self._current.action if self._current else ""),
+                    detail=active.mode if active else "")
+                self._toast_msg(t("armed_toast"))
+            self._notify_status(f"● {t('armed')} · {pname}")
         else:
             self._arm_btn.configure(
                 text=t("arm"), fg_color=theme.ACCENT,
@@ -1144,7 +1434,11 @@ class MainWindow(ctk.CTk):
             self._timer_remaining = None  # no timer -> no corner badge
             if self._live_banner.winfo_ismapped():
                 self._live_banner.pack_forget()
-            self._toast_msg(t("disarmed_toast"))
+            if changed:
+                self._record(KIND_DISARM, profile=(
+                    self._current.name if self._current else ""))
+                self._toast_msg(self._session_summary())
+            self._notify_status(f"● {t('disarmed')}")
 
     # ------------------------------------------------------------------ #
     # Event bus drain (GUI thread only, zero leaks)
@@ -1168,6 +1462,10 @@ class MainWindow(ctk.CTk):
         try:
             for ev in self._bus.drain(config.GUI_BATCH_MAX):
                 if ev.type is EventType.OVERLAY and self._overlay is None:
+                    self._record(KIND_TRIGGER,
+                                 action=ev.payload.get("action", ""),
+                                 source=ev.payload.get("source", ""),
+                                 profile=ev.payload.get("profile", ""))
                     self._show_overlay(ev.payload)
                 elif ev.type is EventType.STATE:
                     if self._hub:
@@ -1178,11 +1476,20 @@ class MainWindow(ctk.CTk):
                 elif ev.type is EventType.LOG:
                     self._log(ev.payload.get("msg", ""))
                 elif ev.type is EventType.ABORT:
+                    self._record(KIND_CANCELLED)
                     self._log(t("aborted"))
                 elif ev.type is EventType.EXECUTED:
+                    self._record(
+                        KIND_EXECUTED,
+                        action=ev.payload.get("action", ""),
+                        detail="ok" if ev.payload.get("ok") else "failed",
+                    )
                     self._log(t("executed",
                                 action=ev.payload.get("action", "?")))
                 elif ev.type is EventType.ERROR:
+                    self._record(KIND_ERROR,
+                                 source=ev.payload.get("sensor", ""),
+                                 detail=ev.payload.get("error", ""))
                     self._log(t("sensor_err", sensor=ev.payload.get("sensor"),
                                 error=ev.payload.get("error")))
         finally:
@@ -1260,8 +1567,9 @@ class MainWindow(ctk.CTk):
     def _render_state(self, payload: dict) -> None:
         src = payload.get("source")
         if src == "absolute" and "remaining_s" in payload:
-            self._timer_remaining = float(payload["remaining_s"])
-            h, rest = divmod(int(payload["remaining_s"]), 3600)
+            remaining = float(payload["remaining_s"])
+            self._timer_remaining = remaining
+            h, rest = divmod(int(remaining), 3600)
             m, s = divmod(rest, 60)
             clock = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
             self._status_dot.configure(
@@ -1269,6 +1577,8 @@ class MainWindow(ctk.CTk):
             # The whole pill reads "counting": amber border while ticking.
             self._status_pill.configure(
                 fg_color=theme.ARMED_PILL_BG, border_color=theme.WARN)
+            self._maybe_warn_soon(remaining)
+            self._notify_status(f"⏱ {clock}")
         if src == "smart" and "score" in payload:
             score = int(payload["score"])
             color = theme.score_color(score)
@@ -1391,9 +1701,9 @@ class MainWindow(ctk.CTk):
         self._log_box.configure(state="disabled")
 
     def _toast_msg(self, msg: str) -> None:
-        if self._toast is not None and self._toast.winfo_exists():
-            self._toast.dismiss()  # one toast at a time: no visual stacking
-        self._toast = Toast(self)
+        """One reusable toast window: no per-message Toplevel leak."""
+        if self._toast is None or not self._toast.winfo_exists():
+            self._toast = Toast(self)
         self._toast.show(msg)
 
     # ------------------------------------------------------------------ #
@@ -1451,6 +1761,10 @@ class MainWindow(ctk.CTk):
         if self._badge is not None and self._badge.winfo_exists():
             self._badge.destroy()
         self._badge = None
+        if self._toast is not None and self._toast.winfo_exists():
+            with contextlib.suppress(Exception):
+                self._toast.destroy()
+        self._toast = None
         if self._settings_win is not None and self._settings_win.winfo_exists():
             self._settings_win.destroy()
         self._settings_win = None

@@ -17,11 +17,13 @@ processes : psutil.process_iter | tasklist
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import platform
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -660,6 +662,76 @@ def _mac_power_action(action: str) -> bool:  # pragma: no cover
         log.error("osascript failed to start: %s", exc)
         return False
     return result.returncode == 0
+
+
+# --------------------------------------------------------------------------- #
+# Login autostart (per-user, HKCU only: never needs admin rights)
+# --------------------------------------------------------------------------- #
+_AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_AUTOSTART_NAME = "SmartShutdownHub"
+
+
+def _autostart_command() -> str:
+    """Command line Windows should run at login for this install.
+
+    Frozen builds point straight at the packaged exe; source checkouts
+    use pythonw.exe so no console window flashes at login.
+    """
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    script = Path(__file__).resolve().parents[2] / "main.py"
+    exe = Path(sys.executable)
+    pyw = exe.with_name("pythonw.exe")
+    if pyw.exists():
+        exe = pyw
+    return f'"{exe}" "{script}"'
+
+
+def is_autostart() -> bool:
+    """True when the login entry exists. Read-only; False elsewhere."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, _AUTOSTART_NAME)
+            return bool(value)
+    except OSError:
+        return False  # no key/value yet: simply not enabled
+    except Exception as exc:  # pragma: no cover - hostile registry
+        log.warning("autostart probe failed: %s", exc)
+        return False
+
+
+def set_autostart(enabled: bool) -> bool:
+    """Create/remove the per-user login entry. True when it took effect.
+
+    Failure is non-fatal and reported as False so the UI can revert the
+    switch instead of claiming a change that never happened.
+    """
+    if not IS_WINDOWS:  # pragma: no cover - Windows-only product
+        return False
+    try:
+        import winreg
+
+        with winreg.CreateKey(
+            winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY
+        ) as key:
+            if enabled:
+                winreg.SetValueEx(
+                    key, _AUTOSTART_NAME, 0, winreg.REG_SZ,
+                    _autostart_command(),
+                )
+            else:
+                # Already absent: removal is idempotent.
+                with contextlib.suppress(FileNotFoundError):
+                    winreg.DeleteValue(key, _AUTOSTART_NAME)
+        log.info("autostart %s", "enabled" if enabled else "disabled")
+        return True
+    except Exception as exc:  # pragma: no cover - hostile registry
+        log.warning("autostart update failed: %s", exc)
+        return False
 
 
 def abort_os_shutdown() -> None:

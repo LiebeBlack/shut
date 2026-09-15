@@ -27,6 +27,7 @@ DEFAULTS: dict = {
     "window_geometry": "",       # "WxH+X+Y" remembered across runs
     "network_debounce_s": 120,
     "accent": "mint",           # accent family name (see gui/theme.ACCENTS)
+    "autostart": False,          # mirror of the HKCU Run entry (re-applied at boot)
 }
 
 

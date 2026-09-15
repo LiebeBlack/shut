@@ -9,6 +9,7 @@ import sys
 
 from . import config
 from .core.engine import MonitoringEngine
+from .core.history import ActivityLog
 from .core.hub import IntelligenceHub
 from .core.storage import ProfileStore
 from .events import EventBus
@@ -64,6 +65,14 @@ def main() -> None:
     set_language(settings.get("language") or detect_language())
     log.info("hardware tuning profile: %s", config.apply_hardware_tuning())
 
+    # Re-apply the login entry on every boot: the install folder may have
+    # moved since the user flipped the switch, leaving a dead Run target.
+    if settings.get("autostart"):
+        from .platform_layer import set_autostart
+
+        if not set_autostart(True):
+            log.warning("autostart entry could not be refreshed")
+
     # SSE4.2 capability gate: without it, relax the Smart telemetry
     # cadence to protect entry-level CPUs. Everything else is unchanged.
     from .platform_layer import cpu_sse4_2
@@ -81,18 +90,31 @@ def main() -> None:
     engine = MonitoringEngine(bus, store)
     hub = IntelligenceHub(bus, settings)  # advisory only; see core/hub.py
     hub.start()
+    history = ActivityLog(config.ACTIVITY_DB_PATH)  # rolling journal
 
-    window = MainWindow(bus, store, engine, settings, hub=hub)
+    window = MainWindow(bus, store, engine, settings, hub=hub,
+                        history=history)
+
+    def _tray_toggle() -> None:
+        """Tray click → arm/disarm, marshalled onto the GUI thread."""
+        with contextlib.suppress(Exception):
+            window.after(0, window._on_arm)
+
     tray = TrayIcon(
         restore_cb=window.restore,
         quit_cb=lambda: _quit(window, tray),
         tooltip=f"{config.APP_NAME} v{config.APP_VERSION}",
+        toggle_cb=_tray_toggle,
     )
     if tray.available:
         # Close-to-tray only when a tray actually exists; otherwise close
         # must mean quit (the window decides via _tray_available).
         window._tray_available = True
+        window._status_hook = tray.set_state  # live tooltip + menu label
         tray.start()
+        # Seed the tooltip with the real starting state (no balloon: the
+        # state did not change, we are just describing it).
+        window._notify_status(f"● {t('disarmed')}")
     else:
         window._tray_available = False
 

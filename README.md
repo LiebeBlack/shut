@@ -27,6 +27,7 @@ de emergencia de 30 segundos.
    - [core/engine.py — orquestador + watchdog](#coreenginepy)
    - [core/executor.py — ejecutor seguro](#coreexecutorpy)
    - [core/storage.py — CRUD SQLite](#corestoragepy)
+   - [core/history.py — diario de actividad](#corehistorypy)
    - [gui — cockpit, overlay, toasts, tray](#gui)
 5. [Referencia de configuración](#referencia-de-configuración)
 6. [Optimización SSE4.2](#optimización-sse42)
@@ -56,6 +57,32 @@ de emergencia de 30 segundos.
   Inno Setup vía choco, checksums SHA-256, release automático en tags).
 - 🖼 **Icono sin dependencias nativas**: `make_ico.py` cae a PIL puro si
   `cairosvg` no está (CI nunca depende de cairo).
+
+## Novedades v4
+
+- 🧾 **Diario de actividad persistente** (`core/history.py`): cada
+  armado, desarmado, disparo, ejecución, cancelación y error de sensor
+  se guarda en `activity.db` (ventana móvil de `ACTIVITY_MAX_ROWS`
+  filas) con contadores de por vida. La nueva sección *Actividad* del
+  panel los muestra y se refresca sola.
+- ⛔ **Botón de rescate «Abortar apagado del sistema»** (y `F8`): usa la
+  vía pública `abort_pending_os_shutdown()` para recuperar un apagado
+  del SO que todavía esté dentro de su ventana de gracia de 60 s.
+- ⏱ **Aviso de escalada T-60**: una sola alerta (toast + telemetría)
+  cuando la cuenta atrás cruza el minuto final, antes del overlay.
+- 📊 **Resumen de sesión**: al desarmar, el toast indica duración y
+  número de disparos de la sesión que acaba de cerrarse.
+- ⧉ **Clonar perfil**: duplica el perfil visible (nombre «(copia)»)
+  para probar variantes sin perder el original.
+- ↻ **Inicio con Windows** desde Ajustes: entrada por usuario en
+  `HKCU\...\Run` (sin permisos de administrador) que se reescribe en
+  cada arranque para seguir apuntando a esa instalación.
+- 🔔 **Bandeja viva**: el tooltip sigue el estado real (armado / cuenta
+  atrás / desarmado), el menú ofrece armar o desarmar con un clic y
+  cada cambio de estado lanza un globo nativo.
+- 🧹 **Sin fugas de ventanas**: los toasts reutilizan una sola ventana
+  (antes se creaba un `Toplevel` por mensaje) y los nuevos temporizadores
+  se cancelan antes de reprogramarse.
 
 ## Arquitectura
 
@@ -187,10 +214,20 @@ compartidas entre hilos). Tabla `profiles` con migración idempotente
 v1→v2 (columna `battery_min`), perfil por defecto auto-sembrado,
 export/import JSON con deduplicación por nombre.
 
+### core/history.py
+Diario de actividad en SQLite (o en memoria si se construye sin ruta,
+ideal para pruebas): tabla `activity` con índice por fecha y ventana
+móvil acotada. Registra `arm`, `disarm`, `trigger`, `executed`,
+`cancelled` y `error`; expone `record()`, `recent()`, `counts()`,
+`total()` y `clear()`. Conexión por llamada + lock, igual que
+`ProfileStore`, y cualquier fallo se registra y se ignora: **el diario
+nunca puede romper un apagado**.
+
 ### gui
 - **main_window.py** — cockpit: dashboard (riesgo + tiles CPU/RAM/Temp/
   Bat + línea de consejo IA clicable), selector de perfil + CRUD,
-  accordions (disparo / avanzado / proceso / telemetría), sliders con
+  accordions (disparo / avanzado / proceso / telemetría / actividad),
+  sliders con
   etiqueta en vivo, selector segmentado de acción, botón ARMAR/DESARMAR,
   menú de Ajustes (idioma ES/EN en caliente, iniciar minimizado,
   dry-run, Hub IA, reporte SSE4.2), export/import, console de telemetría
@@ -206,9 +243,11 @@ export/import JSON con deduplicación por nombre.
 - **overlay.py** — ventana semitransparente, sin bordes, siempre al
   frente, countdown 30 s (se vuelve rojo ≤ 5 s), botón gigante CANCELAR
   + `Escape`, banner 🧪 en modo ensayo. `finalize()` solo al agotarse.
-- **toast.py** — notificaciones efímeras abajo-derecha sin robar foco.
+- **toast.py** — notificaciones efímeras abajo-derecha sin robar foco
+  (una sola ventana reutilizada: cero fugas de `Toplevel`).
 - **tray.py** — pystray+PIL (opcionales: sin ellos la app corre y cerrar
-  sale). Icono SVG/PIL con fallback dibujado.
+  sale). Icono SVG/PIL con fallback dibujado, tooltip con el estado en
+  vivo y entrada de menú para armar/desarmar desde la bandeja.
 
 ## Hub de Inteligencia / IA
 
@@ -256,13 +295,18 @@ Todo en `sshub/config.py` (ajustable sin tocar lógica):
 | `BATTERY_LOW_PCT` / `BATTERY_DEBOUNCE_S` | 10 / 15 | red de seguridad de batería |
 | `IDLE_POLL_S` / `MONITOR_POLL_S` / `MONITOR_OFF_DEBOUNCE_S` | 5 / 4 / 10 | idle, monitor |
 | `HUB_POLL_S` / `HUB_TIMEOUT_S` / `HUB_MAX_BODY` | 5 / 3 / 64 KB | Hub IA |
+| `ACTIVITY_MAX_ROWS` | 500 | filas del diario que se conservan |
+| `JOURNAL_PREVIEW_ROWS` | 8 | entradas visibles en la tarjeta |
+| `SESSION_MIN_TRIGGERS` | 1 | disparos para resumir la sesión |
 
 Variables de entorno: `SSHUB_DRY_RUN=1` (modo ensayo), `SSHUB_LANG`
 (es|en), `SSHUB_HUB_URL`, `SSHUB_HUB_KEY`, `SSHUB_OS_TIMEOUT`.
 
 Ajustes de usuario (`settings.json`, escritura atómica): `language`,
-`start_minimized`, `dry_run_default`, `hub_enabled`, `network_debounce_s`,
-`accent`. Un archivo corrupto se renombra `.corrupt` y se reconstruye.
+`start_minimized`, `dry_run_default`, `hub_enabled`,
+`countdown_overlay`, `window_geometry`, `network_debounce_s`,
+`accent`, `autostart`. Un archivo corrupto se renombra `.corrupt` y se
+reconstruye.
 
 En Windows, los Intel Celeron, Pentium y Atom activan automáticamente un
 perfil de bajo consumo: reduce el sondeo lento y Smart sin afectar la

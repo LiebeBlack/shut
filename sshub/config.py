@@ -27,6 +27,7 @@ def default_data_dir() -> Path:
 DATA_DIR = default_data_dir()
 DB_PATH = DATA_DIR / "profiles.db"
 LOG_PATH = DATA_DIR / "sshub.log"
+ACTIVITY_DB_PATH = DATA_DIR / "activity.db"   # rolling activity journal
 
 # --------------------------------------------------------------------------- #
 # Performance tuning (RAM / CPU budget for entry-level CPUs)
@@ -44,6 +45,9 @@ GUI_BATCH_MAX = 40             # max events consumed per drain cycle
 OVERLAY_SECONDS = 30           # emergency-cancel window before executing
 TRIGGER_COOLDOWN_S = 60        # after a user cancel: no re-trigger window
 LOG_MAX_LINES = 400            # GUI console ring size before trimming
+ACTIVITY_MAX_ROWS = 500        # activity journal window kept on disk
+JOURNAL_PREVIEW_ROWS = 8       # entries rendered in the dashboard card
+SESSION_MIN_TRIGGERS = 1       # triggers needed to summarize a session
 
 # Smart mode (weighted heuristic score)
 SMART_THRESHOLD = 70           # 0-100; fires when score >= threshold
