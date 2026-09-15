@@ -36,8 +36,46 @@ DANGER_HOVER = "#e04848"
 ON_DANGER = "#ffffff"     # text placed on danger fills
 INFO = "#7f9cf5"           # periwinkle: AI advice, hub
 GHOST = "#2d3446"          # neutral secondary buttons
-ARMED_PILL_BG = "#10241d"     # status pill while armed (mint-tinted)
+ARMED_PILL_BG = "#10241d"     # status pill while armed (accent-tinted)
 ARMED_PILL_BORDER = "#1f4a3a"
+
+# --------------------------------------------------------------------------- #
+# Live accent picker: swappable accent hues. Every other token (surfaces,
+# borders, text) is hue-neutral by design, so swapping the accent family
+# re-skins buttons, sliders, bars, radios, pill and logo with one call.
+# --------------------------------------------------------------------------- #
+ACCENTS: dict[str, dict[str, str]] = {
+    "mint": {
+        "ACCENT": "#00e5a0", "ACCENT_HOVER": "#00c08a",
+        "ACCENT_TEXT": "#0b0d12",
+        "ARMED_PILL_BG": "#10241d", "ARMED_PILL_BORDER": "#1f4a3a",
+    },
+    "blue": {
+        "ACCENT": "#4da3ff", "ACCENT_HOVER": "#2f8ae6",
+        "ACCENT_TEXT": "#0b0d12",
+        "ARMED_PILL_BG": "#101d2e", "ARMED_PILL_BORDER": "#1f3a5c",
+    },
+    "amber": {
+        "ACCENT": "#ffb020", "ACCENT_HOVER": "#e09a10",
+        "ACCENT_TEXT": "#0b0d12",
+        "ARMED_PILL_BG": "#2a2010", "ARMED_PILL_BORDER": "#5c441f",
+    },
+    "violet": {
+        "ACCENT": "#b48cff", "ACCENT_HOVER": "#9a6ef0",
+        "ACCENT_TEXT": "#0b0d12",
+        "ARMED_PILL_BG": "#1c1430", "ARMED_PILL_BORDER": "#3a2a5c",
+    },
+}
+DEFAULT_ACCENT = "mint"
+
+
+def set_accent(name: str) -> None:
+    """Swap the module-level accent tokens live. The caller must re-color
+    existing widgets. Unknown names fall back to mint."""
+    family = ACCENTS.get(name, ACCENTS[DEFAULT_ACCENT])
+    for token, color in family.items():
+        globals()[token] = color
+
 
 FONT = "Segoe UI"
 MONO = "Consolas"

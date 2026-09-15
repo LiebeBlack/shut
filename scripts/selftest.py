@@ -33,6 +33,7 @@ except Exception:
     pass
 
 from sshub import config  # noqa: E402
+from sshub.gui import theme  # noqa: E402
 from sshub.core.engine import MonitoringEngine, _SensorSlot  # noqa: E402
 from sshub.core.executor import ActionExecutor  # noqa: E402
 from sshub.core.smart import DEFAULT_WEIGHTS, SmartSignals  # noqa: E402
@@ -417,6 +418,61 @@ def main() -> int:
     win.update()
     check("arm button text", win._arm_btn.cget("text") == t("arm"))
     check("tiles present", set(win._tiles) == {"cpu", "ram", "temp", "batt"})
+
+    # -- ultra: presets, trend, live banner, battery ETA, accent picker -- #
+    win._apply_preset(15)
+    check("preset fills minutes", win._countdown_entry.get() == "15"
+          and win._mode_values.get(win._mode_var.get()) == "absolute")
+    win._apply_preset("22:30")
+    check("preset fills at_time", win._at_time_entry.get() == "22:30")
+    win._at_time_entry.delete(0, "end")
+
+    win._update_trend(30)
+    check("trend neutral first sample", win._dash_trend.cget("text") == "")
+    win._update_trend(60)
+    check("trend rising", win._dash_trend.cget("text") == "↗")
+    win._update_trend(20)
+    check("trend falling", win._dash_trend.cget("text") == "↘")
+
+    # Battery ETA: formats on battery, hidden on AC power.
+    win._acc_batt_pct = 60
+    win._acc_plug = False
+    check("batt eta formats", win._batt_eta() == "~6h00")
+    win._acc_plug = True
+    check("batt eta hidden on AC", win._batt_eta() == "")
+
+    # Live banner: appears armed with a full bar, tracks smart risk,
+    # and disappears on disarm.
+    win._on_arm()
+    win.update()
+    check("live banner visible", win._live_banner.winfo_ismapped()
+          and win._live_bar.get() == 1.0)
+    win._render_state(dict(source="smart", score=85, why=[], cpu_pct=50,
+                           ram_pct=50, temp_c=60, battery_pct=60,
+                           plugged=False))
+    win.update()
+    check("live banner smart risk", "85" in win._live_count.cget("text"))
+    win._on_arm()
+    win.update()
+    check("live banner hides on disarm", not win._live_banner.winfo_ismapped())
+
+    # Live accent switching: token swap + persistence + widget re-skin.
+    win._on_accent("blue")
+    check("accent switches live", theme.ACCENT == "#4da3ff"
+          and str(settings3.get("accent")) == "blue")
+    check("accent re-skins arm button",
+          win._arm_btn.cget("fg_color") == "#4da3ff")
+    win._on_accent("mint")
+    check("accent back to mint", theme.ACCENT == "#00e5a0")
+
+    # Restore the field mutated by the preset/arm above so the original
+    # "profile fields populate == 0" contract below still holds.
+    win._countdown_entry.delete(0, "end")
+    win._countdown_entry.insert(0, "0")
+    cur = win._current
+    if cur is not None:
+        cur.countdown_minutes = 0
+        win._store.update(cur)
 
     win._acc_triggers.toggle()
     win.update()

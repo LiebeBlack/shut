@@ -89,6 +89,18 @@ class MainWindow(ctk.CTk):
         self._old_none_proc = t("none_proc")
         self._drain_after_id: str | None = None
         self._closing = False
+        # -- ultra expansion state --------------------------------------- #
+        self._armed = False
+        self._arm_total_s = 0.0
+        self._trend_prev: int | None = None
+        self._trend_dir = 0
+        self._acc_batt_pct: float | None = None
+        self._acc_plug = False
+        self._accents: dict[str, str] = {
+            name: fam["ACCENT"] for name, fam in theme.ACCENTS.items()
+        }
+        self._accent_sel = str(self._settings.get("accent") or "mint")
+        theme.set_accent(self._accent_sel)  # re-skin before any widget exists
         if self._dry_run:
             os.environ["SSHUB_DRY_RUN"] = "1"  # honor saved dry-run at boot
 
@@ -114,6 +126,10 @@ class MainWindow(ctk.CTk):
         self.bind("<Next>", lambda _e: self._scroll_page(1))
         self.bind("<Home>", lambda _e: self._scroll_to(0.0))
         self.bind("<End>", lambda _e: self._scroll_to(1.0))
+        # Power-user hotkeys: F9 arm/disarm, F10 badge, F1 settings.
+        self.bind("<F9>", lambda _e: self._on_arm())
+        self.bind("<F10>", lambda _e: self._toggle_badge())
+        self.bind("<F1>", lambda _e: self._open_menu())
         if self._settings.get("start_minimized"):
             self.withdraw()  # boot hidden: no window flash on login
 
@@ -178,10 +194,10 @@ class MainWindow(ctk.CTk):
         header = ctk.CTkFrame(self._scroll, fg_color="transparent")
         header.pack(fill="x", padx=12, pady=(10, 2))
 
-        logo = ctk.CTkFrame(header, fg_color=theme.ACCENT, corner_radius=9,
-                            width=36, height=36)
-        logo.pack(side="left", padx=(0, 10))
-        logo.pack_propagate(False)
+        self._logo = ctk.CTkFrame(header, fg_color=theme.ACCENT,
+                                  corner_radius=9, width=36, height=36)
+        self._logo.pack(side="left", padx=(0, 10))
+        self._logo.pack_propagate(False)
         ctk.CTkLabel(
             logo, text="⏻", font=theme.F_TITLE, text_color=theme.ACCENT_TEXT,
         ).pack(expand=True)
@@ -305,11 +321,49 @@ class MainWindow(ctk.CTk):
             self._tiles[key] = lbl
             self._tile_bars[key] = bar
 
+        # Risk-trend arrow beside the smart score (↗ rising / ↘ falling).
+        self._dash_trend = ctk.CTkLabel(
+            score_row, text="", font=theme.F_LABEL_BOLD,
+            text_color=theme.TEXT_MUTED,
+        )
+        self._dash_trend.pack(side="left")
+
+        # Armed live banner: countdown text + depleting bar + quick DISARM.
+        # Created now, packed only while the engine is armed.
+        self._live_banner = ctk.CTkFrame(
+            self._scroll, fg_color=theme.ARMED_PILL_BG, corner_radius=14,
+            border_width=1, border_color=theme.ARMED_PILL_BORDER,
+        )
+        self._live_name = ctk.CTkLabel(
+            self._live_banner, text="", font=theme.F_LABEL_BOLD,
+            text_color=theme.TEXT_PRIMARY, anchor="w",
+        )
+        self._live_name.pack(anchor="w", padx=14, pady=(10, 0))
+        self._live_count = ctk.CTkLabel(
+            self._live_banner, text="", font=theme.F_TITLE,
+            text_color=theme.WARN, anchor="w",
+        )
+        self._live_count.pack(anchor="w", padx=14)
+        self._live_bar = ctk.CTkProgressBar(
+            self._live_banner, height=6, corner_radius=3,
+            fg_color=theme.BG_CONTROL, progress_color=theme.WARN,
+        )
+        self._live_bar.set(0)
+        self._live_bar.pack(fill="x", padx=14, pady=(2, 4))
+        self._live_disarm = ctk.CTkButton(
+            self._live_banner, text=t("disarm"), height=32,
+            font=theme.F_SMALL_BOLD, fg_color=theme.DANGER,
+            hover_color=theme.DANGER_HOVER, text_color=theme.ON_DANGER,
+            corner_radius=8, command=self._on_arm,
+        )
+        self._live_disarm.pack(fill="x", padx=14, pady=(2, 12))
+
         # -- Profile selector ------------------------------------------- #
         sel = ctk.CTkFrame(
             self._scroll, fg_color=theme.BG_CARD, corner_radius=14,
             border_width=1, border_color=theme.BORDER,
         )
+        self._sel_frame = sel  # anchor sibling for the live banner packer
         sel.pack(fill="x", padx=12, pady=6)
 
         sel_row = ctk.CTkFrame(sel, fg_color="transparent")
@@ -377,6 +431,23 @@ class MainWindow(ctk.CTk):
             )
             radio.grid(row=r, column=c, sticky="w", padx=8, pady=3)
             self._mode_radios.append(radio)
+
+        # Quick presets: one-click fill of the timer inputs.
+        presets_row = ctk.CTkFrame(body, fg_color="transparent")
+        presets_row.pack(fill="x", padx=8, pady=(0, 6))
+        for minutes, label in ((15, "15m"), (60, "1h"), (480, "8h")):
+            ctk.CTkButton(
+                presets_row, text=label, width=56, height=26,
+                font=theme.F_SMALL, fg_color=theme.BG_CONTROL,
+                hover_color=theme.BG_HOVER, corner_radius=8,
+                command=lambda m=minutes: self._apply_preset(m),
+            ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            presets_row, text="22:30", width=56, height=26,
+            font=theme.F_SMALL, fg_color=theme.BG_CONTROL,
+            hover_color=theme.BG_HOVER, corner_radius=8,
+            command=lambda: self._apply_preset("22:30"),
+        ).pack(side="left")
 
         inputs_box = ctk.CTkFrame(
             body, fg_color=theme.BG_CARD_INNER, corner_radius=10,
@@ -525,6 +596,64 @@ class MainWindow(ctk.CTk):
         self._log_box.delete("1.0", "end")
         self._log_box.configure(state="disabled")
 
+    def _apply_preset(self, preset: int | str) -> None:
+        """Fill the timer inputs from a quick-preset chip (min or HH:MM)."""
+        self._mode_var.set(t("mode_absolute"))
+        self._at_time_entry.delete(0, "end")
+        if isinstance(preset, str):
+            if not self._valid_hhmm(preset):
+                return
+            self._at_time_entry.insert(0, preset)
+            self._toast_msg(t("preset_applied", v=preset))
+            return
+        self._countdown_entry.delete(0, "end")
+        self._countdown_entry.insert(0, str(preset))
+        self._toast_msg(t("preset_applied", v=f"{preset}m"))
+
+    def _on_accent(self, name: str) -> None:
+        """Live accent switch: re-skin every accent-bearing widget."""
+        theme.set_accent(name)
+        self._accent_sel = name
+        self._settings.set("accent", name)
+        self._apply_accent()
+        self._toast_msg("🎨 " + name)
+
+    def _apply_accent(self) -> None:
+        """Re-color all accent-bearing widgets from the active tokens."""
+        fam = theme.ACCENTS.get(self._accent_sel, theme.ACCENTS["mint"])
+        for aname, btn in list(getattr(self, "_accent_btns", {}).items()):
+            if btn.winfo_exists():
+                btn.configure(
+                    fg_color=fam["ACCENT"], hover_color=fam["ACCENT_HOVER"],
+                    border_width=2 if aname == self._accent_sel else 0,
+                )
+        self._logo.configure(fg_color=theme.ACCENT)
+        self._arm_btn.configure(
+            fg_color=theme.DANGER if self._armed else theme.ACCENT,
+            hover_color=(theme.DANGER_HOVER if self._armed
+                         else theme.ACCENT_HOVER),
+        )
+        self._action_seg.configure(
+            selected_color=theme.ACCENT,
+            selected_hover_color=theme.ACCENT_HOVER,
+        )
+        for radio in self._mode_radios:
+            radio.configure(fg_color=theme.ACCENT,
+                            hover_color=theme.ACCENT_HOVER)
+        for tag in ("_net", "_deb", "_temp", "_batt"):
+            getattr(self, f"{tag}_slider").configure(
+                button_color=theme.ACCENT,
+                button_hover_color=theme.ACCENT_HOVER,
+                progress_color=theme.ACCENT)
+            getattr(self, f"{tag}_lbl").configure(text_color=theme.ACCENT)
+        for bar in self._tile_bars.values():
+            bar.configure(progress_color=theme.ACCENT)
+        if not self._armed:
+            self._status_pill.configure(
+                fg_color=theme.BG_ELEVATED, border_color=theme.BORDER)
+        self._status_dot.configure(
+            text_color=theme.ACCENT if self._armed else theme.TEXT_MUTED)
+
     def _slider_row(self, parent, label, init, frm, to, steps, val, unit, tag):
         """Labeled slider row: title, live value, trough with mint fill."""
         title = ctk.CTkLabel(parent, text=label, font=theme.F_LABEL)
@@ -556,8 +685,8 @@ class MainWindow(ctk.CTk):
         top = ctk.CTkToplevel(self)
         self._settings_win = top
         top.title(t("settings"))
-        top.geometry("420x520")
-        top.minsize(380, 460)
+        top.geometry("420x560")
+        top.minsize(380, 500)
         top.configure(fg_color=theme.BG_ROOT)
         top.transient(self)
         top.grab_set()
@@ -584,6 +713,24 @@ class MainWindow(ctk.CTk):
             fg_color=theme.BG_CONTROL, selected_color=theme.ACCENT,
         )
         seg.pack(fill="x", padx=12, pady=4)
+
+        # Live accent picker: color swatches, one click re-skins the UI.
+        ctk.CTkLabel(
+            g1, text=t("accent"), font=theme.F_SECTION,
+        ).pack(anchor="w", padx=12, pady=(6, 2))
+        self._accent_row = ctk.CTkFrame(g1, fg_color="transparent")
+        self._accent_row.pack(fill="x", padx=12, pady=(0, 4))
+        self._accent_btns: dict[str, ctk.CTkButton] = {}
+        for name, hex_color in self._accents.items():
+            btn = ctk.CTkButton(
+                self._accent_row, text="", width=34, height=26,
+                corner_radius=8, fg_color=hex_color, hover_color=hex_color,
+                border_width=2 if name == self._accent_sel else 0,
+                border_color=theme.TEXT_PRIMARY,
+                command=lambda n=name: self._on_accent(n),
+            )
+            btn.pack(side="left", padx=(0, 6))
+            self._accent_btns[name] = btn
 
         self._min_var = ctk.BooleanVar(
             value=bool(self._settings.get("start_minimized")))
@@ -673,6 +820,7 @@ class MainWindow(ctk.CTk):
         self._temp_title.configure(text=t("thermal_max"))
         self._batt_title.configure(text=t("battery_min"))
         self._action_lbl.configure(text=t("action_label"))
+        self._live_disarm.configure(text=t("disarm"))
         self._dry_var.set(("🧪 " + t("dry_run")) if self._dry_run else "")
 
         # Update telemetry tile labels
@@ -909,6 +1057,7 @@ class MainWindow(ctk.CTk):
             self._hub.set_profile(p)  # advisor matches the armed profile
 
         self._engine.arm([p])
+        self._arm_total_s = float(p.countdown_minutes) * 60.0
         self._set_armed_ui(True)
         self._log(t("arm_log", name=p.name, mode=p.mode, action=p.action))
 
@@ -932,6 +1081,7 @@ class MainWindow(ctk.CTk):
             return False
 
     def _set_armed_ui(self, armed: bool) -> None:
+        self._armed = armed
         if armed:
             self._arm_btn.configure(
                 text=t("disarm"), fg_color=theme.DANGER,
@@ -943,6 +1093,13 @@ class MainWindow(ctk.CTk):
             self._status_pill.configure(
                 fg_color=theme.ARMED_PILL_BG,
                 border_color=theme.ARMED_PILL_BORDER)
+            pname = self._current.name if self._current else ""
+            self._live_name.configure(text=t("live_armed", name=pname))
+            self._live_bar.set(1.0)
+            if not self._live_banner.winfo_ismapped():
+                self._live_banner.pack(fill="x", padx=12, pady=6,
+                                       before=self._sel_frame)
+            self._toast_msg(t("armed_toast"))
         else:
             self._arm_btn.configure(
                 text=t("arm"), fg_color=theme.ACCENT,
@@ -954,6 +1111,9 @@ class MainWindow(ctk.CTk):
             self._status_pill.configure(
                 fg_color=theme.BG_ELEVATED, border_color=theme.BORDER)
             self._timer_remaining = None  # no timer -> no corner badge
+            if self._live_banner.winfo_ismapped():
+                self._live_banner.pack_forget()
+            self._toast_msg(t("disarmed_toast"))
 
     # ------------------------------------------------------------------ #
     # Event bus drain (GUI thread only, zero leaks)
@@ -1066,8 +1226,56 @@ class MainWindow(ctk.CTk):
             color = theme.score_color(score)
             self._dash_score.configure(text=f"🧠 {score}%", text_color=color)
             self._dash_why.configure(text=" · ".join(payload.get("why", [])))
+            self._update_trend(score)  # is the risk rising or falling?
         if src in ("smart", "thermal_battery"):
             self._update_tiles(payload)
+        self._update_live_banner(payload)
+
+    def _update_trend(self, score: int) -> None:
+        """Risk-trend arrow from two consecutive smart samples."""
+        if self._trend_prev is not None:
+            delta = score - self._trend_prev
+            new_dir = 1 if delta > 0 else (-1 if delta < 0
+                                           else self._trend_dir)
+            if new_dir != self._trend_dir:
+                self._trend_dir = new_dir
+                icon = {-1: "↘", 0: "→", 1: "↗"}[new_dir]
+                color = {-1: theme.ACCENT, 0: theme.TEXT_MUTED,
+                         1: theme.DANGER}[new_dir]
+                self._dash_trend.configure(text=icon, text_color=color)
+        self._trend_prev = score
+
+    def _batt_eta(self) -> str:
+        """Estimated runtime left on battery (~6 min per %, heuristic)."""
+        if self._acc_plug or self._acc_batt_pct is None:
+            return ""
+        minutes = max(10, int(self._acc_batt_pct * 6))
+        h, m = divmod(minutes, 60)
+        return f"~{h}h{m:02d}" if h else f"~{m}m"
+
+    def _update_live_banner(self, payload: dict) -> None:
+        """Armed banner: mode-aware countdown text and depletion bar."""
+        if not self._armed or not self._live_banner.winfo_ismapped():
+            return
+        src = payload.get("source")
+        if src == "absolute" and "remaining_s" in payload:
+            remaining = float(payload["remaining_s"])
+            total = (self._arm_total_s if self._arm_total_s > 0
+                     else max(remaining, 1.0))
+            frac = max(0.0, min(1.0, remaining / total))
+            m, s = divmod(int(remaining), 60)
+            self._live_count.configure(
+                text=t("live_countdown", mm=f"{m:02d}", ss=f"{s:02d}"),
+                text_color=theme.DANGER if remaining <= 60 else theme.WARN,
+            )
+            self._live_bar.set(frac)
+        elif src == "smart" and "score" in payload:
+            score = int(payload["score"])
+            self._live_count.configure(
+                text=t("live_risk", v=score),
+                text_color=theme.score_color(score),
+            )
+            self._live_bar.set(max(0.0, min(1.0, score / 100.0)))
 
     def _update_tiles(self, payload: dict) -> None:
         """Telemetry tiles: value text + tricolor progress bar fill."""
@@ -1101,6 +1309,9 @@ class MainWindow(ctk.CTk):
         batt = payload.get("battery_pct")
         if batt is not None:
             plug = payload.get("plugged")
+            self._acc_batt_pct = float(batt)
+            if plug is not None:  # only flip state on explicit key
+                self._acc_plug = bool(plug)
             if plug:
                 # On AC power: battery risk is zero by definition.
                 icon = "⚡"
@@ -1109,7 +1320,7 @@ class MainWindow(ctk.CTk):
                 frac = 0.0
             else:
                 icon = "🔋"
-                suffix = f"{int(batt)}%"
+                suffix = f"{int(batt)}% · {self._batt_eta()}"
                 color = theme.live_color(100 - batt)
                 frac = max(0.0, min(1.0, batt / 100.0))
             self._tiles["batt"].configure(
