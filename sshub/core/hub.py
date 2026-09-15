@@ -199,17 +199,19 @@ class IntelligenceHub:
     # Loop + publish
     # ------------------------------------------------------------------ #
     def _loop(self) -> None:
-        while not self._stop.wait(config.HUB_POLL_S):
+        while True:
             with self._lock:
                 signals = dict(self._signals)
-            if not signals:
-                continue
-            advice = (
-                self._remote_advice(signals)
-                if self._remote_url
-                else None
-            ) or self._local_advice(signals)
-            self._publish(advice)
+            if signals:
+                advice = (
+                    self._remote_advice(signals)
+                    if self._remote_url
+                    else None
+                ) or self._local_advice(signals)
+                self._publish(advice)
+            # First verdict lands immediately; later ones on cadence.
+            if self._stop.wait(config.HUB_POLL_S):
+                return
 
     def _publish(self, advice: Advice) -> None:
         with self._lock:

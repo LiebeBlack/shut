@@ -33,7 +33,11 @@ FireCallback = Callable[[str, str], None]  # (source, action)
 
 
 class Sensor(ABC):
-    """Base class: cadence-managed, thread-safe, never blocks the GUI."""
+    """Base class: cadence-managed, thread-safe, never blocks the GUI.
+
+    One-shot semantics: a sensor fires at most once per arm. `reset()`
+    is called by the engine when re-arming so the next arm starts clean.
+    """
 
     name = "sensor"
     tick: float = config.SENSOR_SLOW_TICK_S
@@ -43,6 +47,11 @@ class Sensor(ABC):
         self.profile = profile
         self._fire = fire
         self._last_poll = 0.0
+        self._fired = False
+
+    def reset(self) -> None:
+        """Clear the one-shot latch (called on every arm)."""
+        self._fired = False
 
     def poll_if_due(self, now: float) -> None:
         """Cadence gate; exceptions propagate to the engine watchdog."""
@@ -64,23 +73,27 @@ class AbsoluteTimerSensor(Sensor):
     def __init__(self, bus, profile, fire) -> None:
         super().__init__(bus, profile, fire)
         p = profile
-        self._deadline: float | None = None
+        # A profile may combine a countdown and a scheduled time: both are
+        # honored, and the earlier deadline wins.
+        deadlines: list[float] = []
         if p.countdown_minutes and p.countdown_minutes > 0:
-            self._deadline = time.monotonic() + p.countdown_minutes * 60
-        elif p.at_time:
+            deadlines.append(time.monotonic() + p.countdown_minutes * 60)
+        if p.at_time:
             try:
-                self._deadline = self._next_wallclock(p.at_time)
+                deadlines.append(self._next_wallclock(p.at_time))
             except ValueError:
                 self.bus.publish(
                     EventType.LOG, msg=t("bad_time", t=p.at_time)
-                )
-                self._deadline = None  # never crash; just stay inert
+                )  # stay inert for the schedule part; never crash
+        self._deadline: float | None = min(deadlines) if deadlines else None
 
     @staticmethod
     def _next_wallclock(hhmm: str) -> float:
-        """Epoch seconds of the next occurrence of HH:MM.
+        """Monotonic deadline for the next occurrence of HH:MM.
 
-        Raises ValueError for anything that is not a valid 24h HH:MM.
+        The engine compares deadlines against time.monotonic(), so the
+        wall-clock target is converted to a monotonic delta here. Raises
+        ValueError for anything that is not a valid 24h HH:MM.
         """
         import datetime as dt
 
@@ -94,16 +107,17 @@ class AbsoluteTimerSensor(Sensor):
         target = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if target <= now:
             target += dt.timedelta(days=1)
-        return target.timestamp()
+        return time.monotonic() + (target - now).total_seconds()
 
     def poll(self) -> None:
-        if self._deadline is None:
+        if self._fired or self._deadline is None:
             return
         remaining = max(0.0, self._deadline - time.monotonic())
         self.bus.publish(EventType.STATE, source=self.name, remaining_s=remaining)
         if remaining <= 0:
             # Fire exactly once per arm: a deadline in the past must not
             # re-execute the action every engine tick forever.
+            self._fired = True
             self._deadline = None
             self._fire(self.name, self.profile.action)
 
@@ -121,6 +135,8 @@ class IdleSensor(Sensor):
         self._last_value: float | None = None
 
     def poll(self) -> None:
+        if self._fired:
+            return
         idle = get_idle_seconds()
         if idle is None:
             self._last_value = None
@@ -131,6 +147,7 @@ class IdleSensor(Sensor):
             threshold_s=self._threshold_s,
         )
         if idle >= self._threshold_s:
+            self._fired = True
             self._fire(self.name, self.profile.action)
 
 
@@ -146,6 +163,8 @@ class MonitorSensor(Sensor):
         self._off_since: float | None = None
 
     def poll(self) -> None:
+        if self._fired:
+            return
         off = is_monitor_off()
         if off is None:
             return
@@ -154,6 +173,7 @@ class MonitorSensor(Sensor):
             held = time.monotonic() - self._off_since
             self.bus.publish(EventType.STATE, source=self.name, off_s=held)
             if held >= config.MONITOR_OFF_DEBOUNCE_S:
+                self._fired = True
                 self._fire(self.name, self.profile.action)
         else:
             self._off_since = None
@@ -199,6 +219,8 @@ class ProcessSensor(Sensor):
         self._proc = None
 
     def poll(self) -> None:
+        if self._fired:
+            return
         if self._proc is None:
             # Backoff: only retry the (expensive) process scan every 15 s.
             now = time.monotonic()
@@ -221,6 +243,7 @@ class ProcessSensor(Sensor):
 
         if cpu is None or not self._proc.is_running():
             self.bus.publish(EventType.STATE, source=self.name, status="exited")
+            self._fired = True
             self._fire(self.name, self.profile.action)
             return
 
@@ -234,6 +257,7 @@ class ProcessSensor(Sensor):
                     status="idle_cpu",
                     cpu=cpu,
                 )
+                self._fired = True
                 self._fire(self.name, self.profile.action)
         else:
             self._zero_since = None
@@ -282,7 +306,9 @@ class NetworkSensor(Sensor):
         threshold = self.profile.network_max_kbps
         if self._ewma_kbps < threshold:
             self._below_since = self._below_since or now
-            if now - self._below_since >= config.NET_DEBOUNCE_S:
+            if (now - self._below_since >= config.NET_DEBOUNCE_S
+                    and not self._fired):
+                self._fired = True
                 self._fire(self.name, self.profile.action)
         else:
             self._below_since = None
@@ -306,8 +332,10 @@ class ThermalBatterySensor(Sensor):
             self.bus.publish(EventType.STATE, source=self.name, temp_c=round(temp, 1))
             if temp >= self.profile.thermal_max_c:
                 self._hot_since = self._hot_since or time.monotonic()
-                if time.monotonic() - self._hot_since >= config.THERMAL_DEBOUNCE_S:
-                    self._fire(self.name, "shutdown")  # thermal => hard stop
+                if (time.monotonic() - self._hot_since
+                        >= config.THERMAL_DEBOUNCE_S and not self._fired):
+                    self._fired = True
+                    self._fire(self.name, "shutdown", True)  # urgent
                     return
             else:
                 self._hot_since = None
@@ -328,7 +356,8 @@ class ThermalBatterySensor(Sensor):
             if not plugged and pct <= limit:
                 self._low_since = self._low_since or time.monotonic()
                 held = time.monotonic() - self._low_since
-                if held >= config.BATTERY_DEBOUNCE_S:
-                    self._fire(self.name, "hibernate")  # emergency => keep state
+                if held >= config.BATTERY_DEBOUNCE_S and not self._fired:
+                    self._fired = True
+                    self._fire(self.name, "hibernate", True)  # urgent
             else:
                 self._low_since = None

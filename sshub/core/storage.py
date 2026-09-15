@@ -127,20 +127,35 @@ class ProfileStore:
         return [p for p in self.list_profiles() if p.enabled]
 
     def export_json(self, path) -> int:
-        """Write all profiles to a JSON file. Returns count written."""
+        """Write all profiles to a JSON file. Returns count written.
+
+        The file carries provenance (app, schema version, source db) so
+        future imports can detect origin and schema shape.
+        """
         import json
 
-        data = [asdict(p) for p in self.list_profiles()]
+        data = {
+            "app": config.APP_NAME,
+            "version": 1,
+            "db": Path(self._path).name,
+            "profiles": [asdict(p) for p in self.list_profiles()],
+        }
         Path(path).write_text(
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        return len(data)
+        return len(data["profiles"])
 
     def import_json(self, path) -> int:
-        """Merge profiles from a JSON file (skip duplicates by name)."""
+        """Merge profiles from a JSON file (skip duplicates by name).
+
+        Accepts both the plain legacy list and the exported envelope
+        ({"profiles": [...], ...}); unknown envelopes are rejected.
+        """
         import json
 
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            raw = raw.get("profiles", [])
         if not isinstance(raw, list):
             raise ValueError("expected a list of profiles")
         existing = {p.name for p in self.list_profiles()}
@@ -212,6 +227,3 @@ class ProfileStore:
             action=row["action"],
             enabled=row["enabled"],
         )
-
-    def to_dict(self, p: Profile) -> dict:
-        return asdict(p)

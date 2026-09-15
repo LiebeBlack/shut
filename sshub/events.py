@@ -8,7 +8,6 @@ Event contract (payload keys are documented for each consumer):
     STATE     source, remaining_s | idle_s | off_s | down_kbps |
               status | temp_c | battery_pct | plugged | score | why |
               cpu_pct | ram_pct
-    TRIGGER   (reserved; sensors call the engine callback directly)
     OVERLAY   action, source, profile, seconds
     ABORT     (no payload)
     EXECUTED  action, ok
@@ -32,7 +31,6 @@ log = logging.getLogger(__name__)
 
 class EventType(Enum):
     STATE = auto()          # periodic engine snapshot for the GUI
-    TRIGGER = auto()        # a sensor fired
     OVERLAY = auto()        # request the 30s emergency overlay
     ABORT = auto()          # user cancelled from overlay
     EXECUTED = auto()       # OS command was issued

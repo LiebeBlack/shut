@@ -41,6 +41,14 @@ class Toast(tk.Toplevel):
                 self.after_cancel(self._after_id)
         self._after_id = self.after(ms, self._hide)
 
+    def dismiss(self) -> None:
+        """Immediate hide + timer teardown (caller replaces the toast)."""
+        if self._after_id:
+            with contextlib.suppress(Exception):
+                self.after_cancel(self._after_id)
+            self._after_id = None
+        self._hide()
+
     def _hide(self) -> None:
         with contextlib.suppress(Exception):
             self.withdraw()

@@ -26,7 +26,7 @@ DEFAULTS: dict = {
     "countdown_overlay": False,  # top-left corner countdown badge
     "window_geometry": "",       # "WxH+X+Y" remembered across runs
     "network_debounce_s": 120,
-    "accent": "#00e5a0",
+    "accent": "mint",           # accent family name (see gui/theme.ACCENTS)
 }
 
 
@@ -70,6 +70,10 @@ class Settings:
         return self._data.get(key, DEFAULTS.get(key))
 
     def set(self, key: str, value) -> None:
-        if key in DEFAULTS:
-            self._data[key] = value
-            self.save()
+        if key not in DEFAULTS:
+            log.warning("unknown setting ignored: %s", key)
+            return
+        if self._data.get(key) == value:
+            return  # no-op: don't rewrite the file on every slider tick
+        self._data[key] = value
+        self.save()

@@ -96,10 +96,14 @@ class MainWindow(ctk.CTk):
         self._trend_dir = 0
         self._acc_batt_pct: float | None = None
         self._acc_plug = False
+        self._advice_visible = False  # packed-state of the advice card
         self._accents: dict[str, str] = {
             name: fam["ACCENT"] for name, fam in theme.ACCENTS.items()
         }
         self._accent_sel = str(self._settings.get("accent") or "mint")
+        if self._accent_sel not in theme.ACCENTS:  # legacy hex → normalize
+            self._accent_sel = theme.DEFAULT_ACCENT
+            self._settings.set("accent", self._accent_sel)
         theme.set_accent(self._accent_sel)  # re-skin before any widget exists
         if self._dry_run:
             os.environ["SSHUB_DRY_RUN"] = "1"  # honor saved dry-run at boot
@@ -156,7 +160,9 @@ class MainWindow(ctk.CTk):
                 geo = ""
         if not geo:
             w = 640
-            h = min(740, max(620, sh - 100))
+            h = min(740, max(560, sh - 100))
+            # Never overflow a small display (netbooks, 125% scaled laptops).
+            w, h = min(w, sw), min(h, sh)
             x = max(0, (sw - w) // 2)
             y = max(0, (sh - h) // 2 - 24)
             geo = f"{w}x{h}+{x}+{y}"
@@ -183,6 +189,7 @@ class MainWindow(ctk.CTk):
     # UI construction
     # ------------------------------------------------------------------ #
     def _build_ui(self) -> None:
+        self._advice_visible = False  # rebuild recreates every widget
         # Whole UI lives in a scrollable frame: responsive across screen sizes
         self._scroll = ctk.CTkScrollableFrame(
             self, width=640, height=520, fg_color="transparent",
@@ -880,7 +887,12 @@ class MainWindow(ctk.CTk):
     def _on_toggle_dry(self) -> None:
         self._dry_run = bool(self._dry_switch_var.get())
         self._settings.set("dry_run_default", self._dry_run)
-        os.environ["SSHUB_DRY_RUN"] = "1" if self._dry_run else "0"
+        if self._dry_run:
+            os.environ["SSHUB_DRY_RUN"] = "1"
+        else:
+            # "0" would be truthy-looking; absent means the platform layer
+            # goes back to executing real actions.
+            os.environ.pop("SSHUB_DRY_RUN", None)
         self._dry_var.set(("🧪 " + t("dry_run")) if self._dry_run else "")
 
     def _on_toggle_hub(self) -> None:
@@ -923,7 +935,7 @@ class MainWindow(ctk.CTk):
         if path:
             n = self._store.export_json(path)
             self._toast_msg(t("exported", path=path))
-            self._log(f"⬇ {n} perfiles → {path}")
+            self._log(t("log_export", n=n, path=path))
 
     def _on_import(self) -> None:
         path = filedialog.askopenfilename(
@@ -978,6 +990,10 @@ class MainWindow(ctk.CTk):
         self._batt_lbl.configure(text=f"{int(p.battery_min)} %")
         if p.process_name:
             self._proc_var.set(p.process_name)
+        else:
+            # Reflect the displayed profile: a stale process picked for a
+            # previous profile must not silently arm with this one.
+            self._proc_var.set(t("none_proc"))
         act_key = {"shutdown": "act_shutdown", "reboot": "act_reboot",
                    "sleep": "act_sleep", "hibernate": "act_hibernate"}.get(
                        p.action, "act_shutdown")
@@ -1022,7 +1038,8 @@ class MainWindow(ctk.CTk):
         procs = list_processes()
         if procs:
             self._proc_menu.configure(values=procs)
-            self._proc_var.set(procs[0])
+            if self._proc_var.get() not in procs:
+                self._proc_var.set(procs[0])
         else:
             self._log(t("proc_list_err"))
 
@@ -1053,11 +1070,24 @@ class MainWindow(ctk.CTk):
         p.action = self._action_values.get(self._action_var.get(), "shutdown")
         self._store.update(p)
         config.NET_DEBOUNCE_S = self._to_int(self._deb_slider.get(), 120)
+        self._settings.set("network_debounce_s", config.NET_DEBOUNCE_S)
         self._timer_remaining = None  # fresh arm: no stale countdown badge
         if self._hub:
             self._hub.set_profile(p)  # advisor matches the armed profile
 
-        self._engine.arm([p])
+        # Multi-profile arm: the visible profile plus every other enabled
+        # profile runs at once (the engine was built for this; the UI
+        # finally offers it). The engine may still refuse (e.g. everything
+        # disabled): only flip the UI if it really armed.
+        targets = [p] + [
+            q for q in self._store.enabled_profiles() if q.id != p.id
+        ]
+        self._engine.arm(targets)
+        if not self._engine.state.armed:
+            self._set_armed_ui(False)
+            self._log(t("no_active_profiles"))
+            self._toast_msg(t("arm_none"))
+            return
         self._arm_total_s = float(p.countdown_minutes) * 60.0
         self._set_armed_ui(True)
         self._log(t("arm_log", name=p.name, mode=p.mode, action=p.action))
@@ -1188,11 +1218,15 @@ class MainWindow(ctk.CTk):
             )
             text = (f"{t('advice_label')}: {reason} · {label} ({conf}%) · "
                     f"{origin}")
-        if text and not self._dash_advice.winfo_ismapped():
+        # winfo_ismapped() is False until the window is realized, so the
+        # packed state is tracked explicitly (re-pack churn otherwise).
+        if text and not self._advice_visible:
             self._dash_advice.pack(fill="x", padx=(14, 8), pady=(0, 4),
                                    before=self._tiles_frame)
-        elif not text and self._dash_advice.winfo_ismapped():
+            self._advice_visible = True
+        elif not text and self._advice_visible:
             self._dash_advice.pack_forget()
+            self._advice_visible = False
         self._dash_advice.configure(text=text)
 
     def _on_advice_click(self) -> None:
@@ -1211,6 +1245,8 @@ class MainWindow(ctk.CTk):
             self._toast_msg(t("advice_applied", action=action))
 
     def _show_overlay(self, payload: dict) -> None:
+        if self._overlay is not None and self._overlay.winfo_exists():
+            return  # a modal emergency is already on screen: never stack two
         self._overlay = EmergencyOverlay(
             self, self._bus, self._engine.executor,
             action=payload.get("action", "shutdown"),
@@ -1225,9 +1261,14 @@ class MainWindow(ctk.CTk):
         src = payload.get("source")
         if src == "absolute" and "remaining_s" in payload:
             self._timer_remaining = float(payload["remaining_s"])
-            m, s = divmod(int(payload["remaining_s"]), 60)
+            h, rest = divmod(int(payload["remaining_s"]), 3600)
+            m, s = divmod(rest, 60)
+            clock = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
             self._status_dot.configure(
-                text=f"● {m:02d}:{s:02d}", text_color=theme.WARN)
+                text=f"● {clock}", text_color=theme.WARN)
+            # The whole pill reads "counting": amber border while ticking.
+            self._status_pill.configure(
+                fg_color=theme.ARMED_PILL_BG, border_color=theme.WARN)
         if src == "smart" and "score" in payload:
             score = int(payload["score"])
             color = theme.score_color(score)
@@ -1270,9 +1311,12 @@ class MainWindow(ctk.CTk):
             total = (self._arm_total_s if self._arm_total_s > 0
                      else max(remaining, 1.0))
             frac = max(0.0, min(1.0, remaining / total))
-            m, s = divmod(int(remaining), 60)
+            h, rest = divmod(int(remaining), 3600)
+            m, s = divmod(rest, 60)
             self._live_count.configure(
-                text=t("live_countdown", mm=f"{m:02d}", ss=f"{s:02d}"),
+                text=t("live_countdown",
+                       mm=f"{h}:{m:02d}" if h else f"{m:02d}",
+                       ss=f"{s:02d}"),
                 text_color=theme.DANGER if remaining <= 60 else theme.WARN,
             )
             self._live_bar.set(frac)
@@ -1339,14 +1383,17 @@ class MainWindow(ctk.CTk):
         self._log_box.configure(state="normal")
         self._log_box.insert("end", f"· {msg}\n")
         lines = int(self._log_box.index("end-1c").split(".")[0])
-        if lines > 400:
-            self._log_box.delete("1.0", "200.0")
+        if lines > config.LOG_MAX_LINES:
+            # Ring buffer: keep the newest half, trim from the top.
+            self._log_box.delete(
+                "1.0", f"{lines - config.LOG_MAX_LINES // 2}.0")
         self._log_box.see("end")
         self._log_box.configure(state="disabled")
 
     def _toast_msg(self, msg: str) -> None:
-        if self._toast is None or not self._toast.winfo_exists():
-            self._toast = Toast(self)
+        if self._toast is not None and self._toast.winfo_exists():
+            self._toast.dismiss()  # one toast at a time: no visual stacking
+        self._toast = Toast(self)
         self._toast.show(msg)
 
     # ------------------------------------------------------------------ #
@@ -1398,6 +1445,9 @@ class MainWindow(ctk.CTk):
                 self.after_cancel(self._drain_after_id)
             self._drain_after_id = None
         self._engine.disarm(silent=True)
+        if self._overlay is not None and self._overlay.winfo_exists():
+            self._overlay._close()  # kills its timers before the app dies
+        self._overlay = None
         if self._badge is not None and self._badge.winfo_exists():
             self._badge.destroy()
         self._badge = None

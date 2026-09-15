@@ -88,14 +88,22 @@ def main() -> None:
         quit_cb=lambda: _quit(window, tray),
         tooltip=f"{config.APP_NAME} v{config.APP_VERSION}",
     )
-    window._tray_available = tray.available
-    tray.start()
+    if tray.available:
+        # Close-to-tray only when a tray actually exists; otherwise close
+        # must mean quit (the window decides via _tray_available).
+        window._tray_available = True
+        tray.start()
+    else:
+        window._tray_available = False
 
     def _sig(_n, _f) -> None:
+        log.info(t("sigterm"))
         _quit(window, tray)
 
     with contextlib.suppress(ValueError, OSError):
         signal.signal(signal.SIGINT, _sig)
+    with contextlib.suppress(ValueError, OSError):
+        signal.signal(signal.SIGTERM, _sig)  # graceful taskkill /logout
 
     # Optional capability report for the log (cheap, cached afterwards).
     from .platform_layer import probe_capabilities
@@ -103,10 +111,13 @@ def main() -> None:
     probe_capabilities()
 
     log.info("Smart Shutdown Hub started (v%s)", config.APP_VERSION)
-    window.mainloop()
-    tray.stop()
-    hub.stop()
-    engine.disarm(silent=True)
+    try:
+        window.mainloop()
+    finally:
+        # Whatever happens, no daemon resource is left running.
+        tray.stop()
+        hub.stop()
+        engine.disarm(silent=True)
 
 
 def _quit(window: MainWindow, tray: TrayIcon) -> None:

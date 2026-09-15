@@ -135,10 +135,14 @@ class EmergencyOverlay(tk.Toplevel):
         self._tick_id = self.after(1000, self._tick)
 
     def _on_cancel(self) -> None:
+        if not self.winfo_exists():
+            return  # double-escape / repeated event: cancel must run once
         self._executor.cancel()
         self._close()
 
     def _finalize(self) -> None:
+        if not self.winfo_exists():
+            return  # already closed: finalize was handled
         self._executor.finalize()
         self._close()
 

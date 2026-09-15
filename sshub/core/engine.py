@@ -48,6 +48,7 @@ class EngineState:
 class _SensorSlot:
     sensor: Sensor
     errors: int = 0
+    swaps: int = 0  # watchdog replacements; a 2nd failure = lost cause
 
 
 class MonitoringEngine:
@@ -77,6 +78,8 @@ class MonitoringEngine:
         self.state.profiles = profiles
         self.state.armed = True
         self._slots = [_SensorSlot(s) for s in self._build_sensors(profiles)]
+        for slot in self._slots:  # one-shot latches start clean each arm
+            slot.sensor.reset()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, name="sshub-engine", daemon=True
@@ -93,6 +96,7 @@ class MonitoringEngine:
         self._slots.clear()
         self.state.armed = False
         self.state.profiles = []
+        self.state.profile = None  # snapshot must not lie after disarm
         if not silent:
             self.bus.publish(EventType.LOG, msg=t("disarm_log"))
             log.info("disarmed")
@@ -142,10 +146,23 @@ class MonitoringEngine:
     # Engine loop + watchdog
     # ------------------------------------------------------------------ #
     def _run(self) -> None:
-        tick = config.ENGINE_TICK_S
+        # Differential heartbeat: profiles with an absolute timer keep a
+        # 1 s cadence for accurate countdowns; anything else idles at a
+        # slower tick so an armed-but-passive session costs near zero.
+        fast_tick = config.ENGINE_TICK_S
+        idle_tick = getattr(config, "ENGINE_IDLE_TICK_S", fast_tick)
+
+        def has_timer() -> bool:
+            return any(
+                isinstance(s.sensor, AbsoluteTimerSensor)
+                for s in self._slots
+            )
+
+        tick = fast_tick if has_timer() else idle_tick
         while not self._stop.wait(tick):
             if self.executor.pending:
                 continue  # overlay owns the countdown now
+            tick = fast_tick if has_timer() else idle_tick
             for slot in list(self._slots):
                 if self._stop.is_set():
                     break
@@ -170,12 +187,23 @@ class MonitoringEngine:
         self.state.profiles = []
 
     def _replace_sensor(self, slot: _SensorSlot) -> None:
-        """Watchdog: live-swap a failing sensor without disarming."""
+        """Watchdog: live-swap a failing sensor without disarming.
+
+        A sensor type that keeps failing after one replacement is
+        dropped for the rest of the arm: an infinite swap-loop would
+        burn CPU and spam the log over a lost cause.
+        """
+        if slot.swaps >= 1:  # already replaced once and still failing
+            if slot in self._slots:
+                self._slots.remove(slot)
+            return
         old = slot.sensor
         try:
             new = type(old)(self.bus, old.profile, self._on_trigger)
+            new.reset()
             slot.sensor = new
             slot.errors = 0
+            slot.swaps += 1
             self.bus.publish(
                 EventType.LOG,
                 msg=t("watchdog_restarted", sensor=old.name),
@@ -185,12 +213,15 @@ class MonitoringEngine:
             log.error("watchdog could not replace %s: %s", old.name, exc)
             self._slots.remove(slot)
 
-    def _on_trigger(self, source: str, action: str) -> None:
+    def _on_trigger(self, source: str, action: str, urgent: bool = False) -> None:
         if self.executor.pending:
             return
-        log.warning("trigger fired: %s -> %s", source, action)
+        log.warning("trigger fired: %s -> %s%s",
+                    source, action, " (urgent)" if urgent else "")
         self.executor.request(
-            action, source, self.state.profile.name if self.state.profile else "?"
+            action, source,
+            self.state.profile.name if self.state.profile else "?",
+            urgent=urgent,
         )
 
     # ------------------------------------------------------------------ #
@@ -200,4 +231,8 @@ class MonitoringEngine:
             "profile": self.state.profile.name if self.state.profile else None,
             "pending": self.executor.pending,
             "sensors": [s.sensor.name for s in self._slots],
+            # Remaining cancel-cooldown seconds: 0 when triggers are live.
+            "cooldown_left_s": max(
+                0.0, self.executor._cooldown_until - time.monotonic()
+            ),
         }

@@ -106,12 +106,18 @@ class SmartSensor:
         self._score = 0
         self._why: list[str] = []
         self._over_since: float | None = None
+        self._fired = False  # one-shot per arm, like every sensor
         self._net_last: tuple[int, int] | None = None
         self._net_t: float | None = None
         self._ewma: float | None = None
         self._proc: Any | None = None       # persistent psutil handle
         self._proc_pid: int | None = None
         self._proc_warm = False             # first sample is a warm-up
+
+    def reset(self) -> None:
+        """One-shot latch reset (engine calls this on every arm)."""
+        self._fired = False
+        self._over_since = None
 
     # -- plumbing ------------------------------------------------------- #
     def poll_if_due(self, now: float) -> None:
@@ -178,15 +184,19 @@ class SmartSensor:
         # Emergency battery override: independent of the score.
         if (
             s.battery_pct is not None and s.battery_pct <= s.battery_min
-            and s.plugged is False
+            and s.plugged is False and not self._fired
         ):
-            self._fire(self.name, "hibernate")
+            self._fired = True
+            self._fire(self.name, "hibernate", True)  # urgent
             return
+        if self._fired:
+            return  # already fired this arm; keep telemetry only next time
 
         hold = config.SMART_HOLD_S
         if score >= config.SMART_THRESHOLD:
             self._over_since = self._over_since or time.monotonic()
             if time.monotonic() - self._over_since >= hold:
+                self._fired = True
                 self._fire(self.name, self.profile.action)
         else:
             self._over_since = None  # hysteresis reset

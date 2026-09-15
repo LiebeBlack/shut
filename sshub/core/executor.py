@@ -32,11 +32,17 @@ class ActionExecutor:
         self._cooldown_until = 0.0  # monotonic; suppresses re-trigger storms
 
     # ------------------------------------------------------------------ #
-    def request(self, action: str, source: str, profile: str) -> None:
-        """Arm the pending action and surface the emergency overlay."""
+    def request(self, action: str, source: str, profile: str,
+                urgent: bool = False) -> None:
+        """Arm the pending action and surface the emergency overlay.
+
+        `urgent=True` (thermal/battery emergencies) bypasses the
+        cancel-cooldown: safety must never be muted by a recent user
+        cancellation. The pending-debounce still applies.
+        """
         if self._pending_action:
             return  # already pending; debounce duplicate triggers
-        if time.monotonic() < self._cooldown_until:
+        if not urgent and time.monotonic() < self._cooldown_until:
             return  # user recently cancelled; latched sensors stay muted
         self._pending_action = ActionExecutor._validate(action)
         self._bus.publish(
@@ -57,9 +63,21 @@ class ActionExecutor:
 
     # ------------------------------------------------------------------ #
     def cancel(self) -> None:
-        """User pressed CANCEL / Escape in the overlay."""
+        """User pressed CANCEL / Escape in the overlay.
+
+        The cooldown exists to mute re-trigger storms from latched
+        sensors, so it is only armed when an action was actually
+        pending — a stray cancel on an idle executor must not blind
+        the monitor for a minute. Also cancels any OS-level pending
+        shutdown (60s grace window after a finalize); harmless no-op
+        when none is pending.
+        """
+        had_pending = self._pending_action is not None
         self._pending_action = None
+        if not had_pending:
+            return  # nothing to abort and nothing to mute
         self._cooldown_until = time.monotonic() + config.TRIGGER_COOLDOWN_S
+        abort_os_shutdown()  # a later OS grace may still be running
         self._bus.publish(EventType.ABORT)
 
     # ------------------------------------------------------------------ #

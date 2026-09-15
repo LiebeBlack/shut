@@ -15,7 +15,6 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 APP_NAME = "Smart Shutdown Hub"
 APP_VERSION = "1.0.0"
-WINDOWS_MIN_VERSION = (10, 0)
 
 # Portable-friendly data dir: %LOCALAPPDATA%/SmartShutdownHub, or ./data
 def default_data_dir() -> Path:
@@ -32,8 +31,8 @@ LOG_PATH = DATA_DIR / "sshub.log"
 # --------------------------------------------------------------------------- #
 # Performance tuning (RAM / CPU budget for entry-level CPUs)
 # --------------------------------------------------------------------------- #
-ENGINE_TICK_S = 1.0            # engine heartbeat while armed (seconds)
-ENGINE_IDLE_TICK_S = 4.0       # heartbeat while disarmed (seconds)
+ENGINE_TICK_S = 1.0            # engine heartbeat with absolute timer (s)
+ENGINE_IDLE_TICK_S = 4.0       # heartbeat while armed without timers (s)
 SENSOR_FAST_TICK_S = 1.0       # active sensors (countdown, PID watcher)
 SENSOR_SLOW_TICK_S = 10.0      # cheap sensors (thermal/battery/network)
 GUI_POLL_MS = 250              # GUI drains the event bus 4x per second
@@ -42,10 +41,9 @@ GUI_BATCH_MAX = 40             # max events consumed per drain cycle
 # --------------------------------------------------------------------------- #
 # Heuristic defaults
 # --------------------------------------------------------------------------- #
-DEFAULT_SHUTDOWN_CMD = "shutdown"
-DEFAULT_TIMEOUT_S = 60         # OS shutdown grace timeout
 OVERLAY_SECONDS = 30           # emergency-cancel window before executing
 TRIGGER_COOLDOWN_S = 60        # after a user cancel: no re-trigger window
+LOG_MAX_LINES = 400            # GUI console ring size before trimming
 
 # Smart mode (weighted heuristic score)
 SMART_THRESHOLD = 70           # 0-100; fires when score >= threshold
@@ -121,15 +119,6 @@ ACTION_LABELS = {
     "reboot": "Reiniciar",
     "sleep": "Suspender",
     "hibernate": "Hibernar",
-}
-
-MODE_LABELS = {
-    "absolute": "Temporizador / Hora programada",
-    "idle": "Inactividad de periféricos",
-    "monitor": "Monitor apagado / suspendido",
-    "process": "Proceso terminado (PID watcher)",
-    "network": "Red inactiva (KB/s)",
-    "hybrid": "Híbrido (todas las condiciones activas)",
 }
 
 

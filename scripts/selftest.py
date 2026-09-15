@@ -14,6 +14,7 @@ Exits non-zero if any check fails. Never touches the real OS or user data
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -40,7 +41,7 @@ from sshub.core.smart import DEFAULT_WEIGHTS, SmartSignals  # noqa: E402
 from sshub.core.storage import Profile, ProfileStore  # noqa: E402
 from sshub.events import EventBus, EventType  # noqa: E402
 from sshub.i18n import detect_language, set_language, t  # noqa: E402
-from sshub.sensors import AbsoluteTimerSensor, Sensor  # noqa: E402
+from sshub.sensors import AbsoluteTimerSensor, IdleSensor, Sensor  # noqa: E402
 from sshub.settings import Settings  # noqa: E402
 from sshub.singleton import SingleInstance  # noqa: E402
 
@@ -135,6 +136,9 @@ def main() -> int:
     exp = tmp / "exp.json"
     n = store.export_json(exp)
     check("export writes", n >= 1 and exp.exists())
+    envelope = json.loads(exp.read_text(encoding="utf-8"))
+    check("export envelope", isinstance(envelope, dict)
+          and isinstance(envelope.get("profiles"), list))
     before = len(store.list_profiles())
     n = store.import_json(exp)
     check("import skips dups", n == 0 and len(store.list_profiles()) == before)
@@ -181,6 +185,8 @@ def main() -> int:
     print("[5/9] timer math + fire-once semantics")
     abs_ok = AbsoluteTimerSensor._next_wallclock("22:30")
     check("wallclock valid", abs_ok > 0)
+    check("wallclock is monotonic (not epoch)",
+          abs_ok < time.monotonic() + 2 * 86400)
     for bad in ("25:00", "12:60", "abc", "12:30:45", ""):
         try:
             AbsoluteTimerSensor._next_wallclock(bad)
@@ -200,6 +206,45 @@ def main() -> int:
     check("timer fires once", fired == ["absolute"] and sen._deadline is None)
     sen.poll_if_due(time.monotonic() + 1.5)
     check("timer never refires", fired == ["absolute"])
+
+    # Combined countdown + scheduled time: the earlier deadline wins
+    # (time-of-day independent: schedule-only equals the wallclock delta,
+    # combined is capped by the 1-minute countdown).
+    at_only = AbsoluteTimerSensor(
+        bus, fresh_profile(countdown_minutes=0, at_time="22:30"),
+        lambda *a: None,
+    )
+    check("schedule deadline equals wallclock delta",
+          at_only._deadline is not None
+          and abs(at_only._deadline - abs_ok) < 1.0)
+    combo = AbsoluteTimerSensor(
+        bus, fresh_profile(countdown_minutes=1, at_time="22:30"),
+        lambda *a: None,
+    )
+    check("combined deadlines honored",
+          combo._deadline is not None
+          and combo._deadline <= time.monotonic() + 60.5)
+
+    # One-shot latches: IdleSensor must fire exactly once per arm.
+    idle_fired: list[str] = []
+    idle_sen = IdleSensor(
+        bus, fresh_profile(idle_minutes=0),
+        lambda src, act, urgent=False: idle_fired.append(src),
+    )
+    for _ in range(3):
+        idle_sen.poll()
+    check("idle fires once", idle_fired == ["idle"])
+    idle_sen.reset()
+    idle_sen.poll()
+    check("idle refires after reset", idle_fired == ["idle", "idle"])
+
+    # Urgent bypass: emergency fires survive a latched cancel-cooldown.
+    from sshub.core.executor import ActionExecutor as _AE  # noqa: E402
+
+    ex_u = _AE(bus)
+    ex_u.cancel()  # latch the cooldown
+    ex_u.request("hibernate", "test", "T", urgent=True)
+    check("urgent bypasses cooldown", ex_u.pending)
 
     bad_sen = AbsoluteTimerSensor(
         bus, fresh_profile(at_time="99:99"), lambda *a: None
@@ -322,6 +367,17 @@ def main() -> int:
     check("errors surfaced to GUI", len(errs) >= 3)
     logs = [e for e in evs if e.type is EventType.LOG]
     check("watchdog log published", any("Watchdog" in e.payload.get("msg", "") for e in logs))
+
+    # Engine snapshot: introspection contract, sampled while armed.
+    eng.arm([p_abs])  # absolute w/ countdown 0: builds sensors, stays inert
+    snap = eng.snapshot()
+    eng.disarm(silent=True)
+    check("snapshot keys", all(k in snap for k in (
+        "armed", "profile", "pending", "sensors", "cooldown_left_s")))
+    check("snapshot reflects armed", snap["armed"] and snap["profile"] == "A2")
+    check("snapshot cooldown non-negative", snap["cooldown_left_s"] >= 0.0)
+    check("snapshot sensors listed",
+          isinstance(snap["sensors"], list) and len(snap["sensors"]) > 0)
 
     # ------------------------------------------------------------------ #
     print("[9/9] GUI: render, accordion, profiles, arm, language, settings")

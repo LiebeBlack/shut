@@ -116,6 +116,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "hub_fallback": "🤖 Hub IA no disponible ({error}) — usando asesor local",
         "bus_drop": "⚠ Cola de eventos llena: {n} descartados",
         "sse_report": "CPU SSE4.2: {ok}",
+        "arm_none": "⚠ Nada que armar: no hay perfiles activos",
+        "log_export": "⬇ {n} perfiles exportados → {path}",
+        "sigterm": "Señal de cierre recibida; saliendo…",
     },
     "en": {
         "app_tagline": "Heuristic energy center",
@@ -221,6 +224,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "hub_fallback": "🤖 AI hub unavailable ({error}) — using local advisor",
         "bus_drop": "⚠ Event queue full: {n} dropped",
         "sse_report": "CPU SSE4.2: {ok}",
+        "arm_none": "⚠ Nothing to arm: no active profiles",
+        "log_export": "⬇ {n} profiles exported → {path}",
+        "sigterm": "Shutdown signal received; exiting…",
     },
 }
 
